@@ -1,0 +1,20 @@
+# Exclude node_modules from Docker build context (huge, not needed - installed inside container)
+frontend/node_modules
+frontend/.next
+
+# Backend Python caches
+backend/__pycache__
+backend/**/__pycache__
+backend/**/*.pyc
+backend/.venv
+backend/venv
+
+# Git and editor files
+.git
+.gitignore
+*.md
+docs/
+
+# Misc
+.DS_Store
+*.log
