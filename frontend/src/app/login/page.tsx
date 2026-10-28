@@ -5,11 +5,7 @@ import { useAuth } from "@/lib/auth-context";
 
 const QUICK_ACCOUNTS = [
   { username: "admin_si_demo", label: "Admin SI", password: "Demo@AdminSI#2024!" },
-  { username: "pg-001", label: "SHO (pg-001)", password: "Password@PJ2024!" },
-  { username: "sho_demo", label: "SHO Demo", password: "Demo@SHO#2024!" },
-  { username: "sector1_si_demo", label: "Sector 1 SI", password: "Demo@Sec1SI#2024!" },
-  { username: "pg-002", label: "Staff (pg-002)", password: "Password@PJ2024!" },
-  { username: "staff_demo", label: "Staff Demo", password: "Demo@Staff#2024!" },
+  { username: "pg-001", label: "Station SHO (pg-001)", password: "Password@PJ2024!" },
 ];
 
 export default function LoginPage() {
