@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 from app.core.config import settings
 from app.db.database import AsyncSessionLocal
 from app.api.routes.auth import router as auth_router
+from app.api.routes.mobile import router as mobile_router
 from app.api.routes.staff import router as staff_router
 from app.api.routes.dashboard import router as dashboard_router
 from app.api.routes.roster import router as roster_router
@@ -101,7 +102,7 @@ _auth_attempts: dict = defaultdict(list)
 
 @app.middleware("http")
 async def auth_rate_limit(request: Request, call_next):
-    if request.url.path == "/auth/login":
+    if request.url.path == "/api/auth/login":
         client_ip = request.client.host if request.client else "unknown"
         now = datetime.now(timezone.utc)
         window = timedelta(minutes=5)
@@ -114,6 +115,7 @@ async def auth_rate_limit(request: Request, call_next):
 
 # Routers
 app.include_router(auth_router, prefix="/api")
+app.include_router(mobile_router, prefix="/api")
 app.include_router(staff_router, prefix="/api")
 app.include_router(dashboard_router, prefix="/api")
 app.include_router(roster_router, prefix="/api")

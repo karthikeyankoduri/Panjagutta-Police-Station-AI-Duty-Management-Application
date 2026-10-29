@@ -49,6 +49,12 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
+# Android / Gradle
+.gradle/
+**/build/
+local.properties
+*.apk
+
 # IDE & OS
 .vscode/
 .idea/

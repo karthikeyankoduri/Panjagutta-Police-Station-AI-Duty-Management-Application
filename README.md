@@ -82,6 +82,25 @@ docker compose exec backend python -m app.db.seed
 
 ---
 
+## Native Android Staff App
+
+The `mobile-android` project contains the native Java staff app. It uses the same FastAPI backend and authenticates through `/api/auth/login`. The staff-only API routes are under `/api/mobile`: profile, published assigned shifts, date-bounded duty diary, attendance submission, and leave requests/history. Each mobile request is authorized against the signed-in user's linked active staff record.
+
+### Build a debug APK
+
+Install Android Studio with Android SDK 35 and JDK 17, then from PowerShell:
+
+```powershell
+cd mobile-android
+.\gradlew.bat assembleDebug "-PAPI_BASE_URL=https://api.example.gov"
+```
+
+Replace the example with the approved backend origin (scheme and hostname, with an optional port; do not append `/api`). The app adds `/api` to its requests. For trusted local Wi-Fi development only, use the computer's reachable LAN origin, such as `http://192.168.1.20:8000`. Without a configured origin, enter one in **API CONNECTION SETTINGS**. A private LAN address cannot be reached over mobile data.
+
+The debug APK is written to `mobile-android\app\build\outputs\apk\debug\app-debug.apk`. Release builds disable cleartext HTTP and require HTTPS. Do not distribute a debug build as a production app. Mobile-data use requires the API to be deployed at an authorized HTTPS address; building the APK alone does not host or publish the backend. Create staff user accounts through the authorized staff-management workflow and link each account to its staff record; do not hardcode real credentials in the app.
+
+---
+
 ## 4. Local Development Setup (Manual)
 
 ### Prerequisites
