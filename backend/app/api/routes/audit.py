@@ -22,6 +22,8 @@ async def list_audit_logs(
     actor_username: Optional[str] = Query(None),
     action: Optional[str] = Query(None),
     entity_type: Optional[str] = Query(None),
+    entity_id: Optional[int] = Query(None),
+    exceptions_only: bool = Query(False),
     limit: int = Query(50, le=200),
     offset: int = Query(0, ge=0),
     current_user: User = Depends(require_roles(UserRoleEnum.SHO, UserRoleEnum.ADMIN_SI)),
@@ -34,6 +36,10 @@ async def list_audit_logs(
         query = query.where(AuditLog.action.ilike(f"%{action}%"))
     if entity_type:
         query = query.where(AuditLog.entity_type.ilike(f"%{entity_type}%"))
+    if entity_id is not None:
+        query = query.where(AuditLog.entity_id == entity_id)
+    if exceptions_only:
+        query = query.where(AuditLog.exception_reason != None)
 
     result = await db.execute(query.order_by(AuditLog.timestamp.desc()).offset(offset).limit(limit))
     logs = result.scalars().all()
@@ -48,6 +54,8 @@ async def list_audit_logs(
             "entity_id": l.entity_id,
             "old_values": l.old_values,
             "new_values": l.new_values,
+            "authorizer_username": l.authorizer_username,
+            "exception_reason": l.exception_reason,
             "request_id": l.request_id,
             "ip_address": l.ip_address,
         }

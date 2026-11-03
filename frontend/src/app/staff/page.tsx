@@ -8,7 +8,11 @@ import {
   updateStaff,
   importStaffCsv,
   clearDemoData,
+  downloadStaffTemplate,
+  getSections,
+  formatApiError,
   StaffMember,
+  SectionItem,
 } from "@/lib/api";
 
 const DESIGNATIONS = [
@@ -31,15 +35,13 @@ const DESIGNATIONS = [
 const CATEGORIES = ["SECTOR_STAFF", "SECTION_DUTY", "DRIVER", "ATTACHED"];
 const SECTORS = [1, 2, 3, 4, 5];
 const USER_ROLES = [
-  "SUPER_ADMIN",
-  "SHO",
-  "DI",
-  "ADMIN_SI",
-  "DSI",
-  "SECTOR_SI",
-  "STATION_WRITER",
-  "SECTION_INCHARGE",
-  "GENERAL_STAFF",
+  { value: "STAFF", label: "STAFF — General Staff / Constable" },
+  { value: "SECTOR_SI", label: "SECTOR_SI — Sector Sub-Inspector" },
+  { value: "DSI", label: "DSI — Duty Sub-Inspector" },
+  { value: "DI", label: "DI — Detective Inspector" },
+  { value: "ADMIN_SI", label: "ADMIN_SI — Admin Sub-Inspector / Station Admin" },
+  { value: "SHO", label: "SHO — Station House Officer" },
+  { value: "SUPER_ADMIN", label: "SUPER_ADMIN — Super Administrator" },
 ];
 
 export default function StaffPage() {
@@ -51,6 +53,9 @@ export default function StaffPage() {
   const [search, setSearch] = useState("");
   const [desigFilter, setDesigFilter] = useState("");
   const [sectorFilter, setSectorFilter] = useState("");
+  const [sectionFilter, setSectionFilter] = useState("");
+  const [attachedFilter, setAttachedFilter] = useState("");
+  const [sections, setSections] = useState<SectionItem[]>([]);
 
   // Add Staff Modal State
   const [showAddModal, setShowAddModal] = useState(false);
@@ -117,6 +122,8 @@ export default function StaffPage() {
         search: search || undefined,
         designation: desigFilter || undefined,
         sector_id: sectorFilter ? parseInt(sectorFilter) : undefined,
+        section: sectionFilter || undefined,
+        attached: attachedFilter === "" ? undefined : attachedFilter === "yes",
       });
       setStaff(data);
     } catch (e) {
@@ -124,11 +131,24 @@ export default function StaffPage() {
     } finally {
       setLoading(false);
     }
-  }, [token, search, desigFilter, sectorFilter]);
+  }, [token, search, desigFilter, sectorFilter, sectionFilter, attachedFilter]);
 
   useEffect(() => {
     fetchStaff();
   }, [fetchStaff]);
+
+  useEffect(() => {
+    if (token) getSections(token).then(setSections);
+  }, [token]);
+
+  const handleTemplateDownload = async () => {
+    if (!token) return;
+    try {
+      await downloadStaffTemplate(token);
+    } catch (e) {
+      setError(formatApiError(e, "Could not download the proforma template"));
+    }
+  };
 
   // Handle Add Staff
   const handleCreate = async (e: React.FormEvent) => {
@@ -168,6 +188,11 @@ export default function StaffPage() {
   // Open Edit Modal
   const handleOpenEdit = (s: StaffMember) => {
     setEditingStaff(s);
+    const rawRole = (s.user_role || "STAFF").toUpperCase();
+    const mappedRole =
+      rawRole === "GENERAL_STAFF" || rawRole === "STATION_WRITER" || rawRole === "SECTION_INCHARGE"
+        ? "STAFF"
+        : rawRole;
     setEditFormData({
       name: s.name,
       designation: s.designation,
@@ -177,7 +202,7 @@ export default function StaffPage() {
       contact_phone: s.contact_phone || "",
       is_active: s.is_active,
       user_username: s.user_username || "",
-      user_role: s.user_role || "GENERAL_STAFF",
+      user_role: mappedRole,
       reset_password: "",
     });
     setEditFormError("");
@@ -206,8 +231,9 @@ export default function StaffPage() {
       setSuccessMsg(`Updated staff profile for ${editFormData.name} successfully.`);
       setTimeout(() => setSuccessMsg(""), 4000);
       fetchStaff();
-    } catch (e) {
-      setEditFormError(e instanceof Error ? e.message : "Failed to update staff member");
+    } catch (e: any) {
+      const msg = typeof e === "string" ? e : (e?.message && e.message !== "[object Object]" ? e.message : "Failed to update staff member");
+      setEditFormError(msg);
     } finally {
       setEditFormLoading(false);
     }
@@ -278,15 +304,15 @@ export default function StaffPage() {
               >
                 🗑 Wipe Demo Data
               </button>
-              <a
-                href="/panjagutta_140_police_staff.csv"
-                download="panjagutta_140_police_staff.csv"
+              <button
+                type="button"
+                onClick={handleTemplateDownload}
                 className="btn btn-secondary"
                 id="btn-download-csv-template"
                 title="Download Official Police Proforma CSV template with unique PG IDs"
               >
                 📥 Download Proforma CSV
-              </a>
+              </button>
               <button
                 className="btn btn-primary"
                 onClick={() => {
@@ -424,16 +450,27 @@ export default function StaffPage() {
               </option>
             ))}
           </select>
+          <select className="form-select" value={sectionFilter} onChange={(e) => setSectionFilter(e.target.value)} style={{ width: 150 }} aria-label="Section">
+            <option value="">All Sections</option>
+            {sections.map((s) => <option key={s.id} value={s.name}>{s.name}</option>)}
+          </select>
+          <select className="form-select" value={attachedFilter} onChange={(e) => setAttachedFilter(e.target.value)} style={{ width: 170 }} aria-label="Attachment">
+            <option value="">Attached &amp; station</option>
+            <option value="yes">Attached to other wings</option>
+            <option value="no">Not attached</option>
+          </select>
           <button className="btn btn-secondary" onClick={fetchStaff} id="btn-apply-filters">
             Apply Filters
           </button>
-          {(search || desigFilter || sectorFilter) && (
+          {(search || desigFilter || sectorFilter || sectionFilter || attachedFilter) && (
             <button
               className="btn btn-secondary"
               onClick={() => {
                 setSearch("");
                 setDesigFilter("");
                 setSectorFilter("");
+                setSectionFilter("");
+                setAttachedFilter("");
               }}
             >
               Reset
@@ -543,8 +580,8 @@ export default function StaffPage() {
                         <span className="badge badge-purple" style={{ fontSize: 10, alignSelf: "flex-start" }}>
                           {s.user_role || "STAFF"}
                         </span>
-                        <div style={{ fontSize: 10, color: "#64748b" }} title="Default initial password">
-                          🔑 <code>Password@PJ2024!</code>
+                        <div style={{ fontSize: 10, color: "#64748b" }} title="Initial password — the officer must set their own at first sign-in">
+                          🔑 <code>Password@PJ2024!</code> <span>(changed at first sign-in)</span>
                         </div>
                       </div>
                     ) : (
@@ -555,6 +592,12 @@ export default function StaffPage() {
                     <span className={`badge ${s.is_active ? "badge-green" : "badge-red"}`}>
                       {s.is_active ? "Active" : "Inactive"}
                     </span>
+                    {s.attached_to && (
+                      <div style={{ fontSize: 11, marginTop: 4 }} title={`Order ${s.attachment_order || "—"}`}>
+                        <span className="badge badge-blue">🔗 Attached</span>
+                        <div style={{ color: "#64748b" }}>{s.attached_to}{s.attachment_until ? ` · until ${s.attachment_until}` : ""}</div>
+                      </div>
+                    )}
                   </td>
                   <td style={{ textAlign: "right" }}>
                     <button
@@ -617,13 +660,9 @@ export default function StaffPage() {
                   Upload staff personnel via official Police Department Excel/CSV proforma with unique Panjagutta IDs (e.g. <code>pg-011</code>). Includes SHO, DI, Admin SI, Duty SI, Sector SIs, Specialized SIs, ASIs, HCs, PCs, WPCs, Drivers, Home Guards, and SPOs.
                 </div>
                 <div style={{ marginTop: 10, display: "flex", gap: 10, alignItems: "center" }}>
-                  <a
-                    href="/panjagutta_140_police_staff.csv"
-                    download="panjagutta_140_police_staff.csv"
-                    className="btn btn-primary btn-sm"
-                  >
+                  <button type="button" onClick={handleTemplateDownload} className="btn btn-primary btn-sm">
                     ⬇ Download Proforma CSV (`panjagutta_140_police_staff.csv`)
-                  </a>
+                  </button>
                 </div>
               </div>
 
@@ -669,7 +708,7 @@ export default function StaffPage() {
                     S.No | Range | Zone | Division | Police Station | PG ID (e.g. pg-011) | Employee ID | Rank | General No | Employee name | Mobile no (personal) | Department No | Mother Tongue | E-mail ID
                   </div>
                   <div style={{ marginTop: 6, fontSize: 11, color: "var(--color-muted)", lineHeight: 1.5 }}>
-                    💡 <em>Note: Unique Station IDs (<code>pg-001</code>, <code>pg-011</code>, etc.) are automatically assigned. Every personnel is provisioned a login account with default password <code>Password@PJ2024!</code> (or from a 'Password' column). Personnel can sign in using their Station ID (e.g. <code>pg-001</code>), HRMS Employee ID, or Email.</em>
+                    💡 <em>Note: Unique Station IDs (<code>pg-001</code>, <code>pg-011</code>, etc.) are automatically assigned. Every personnel is provisioned a login account with default password <code>Password@PJ2024!</code> (or from a &apos;Password&apos; column). Personnel can sign in using their Station ID (e.g. <code>pg-001</code>), HRMS Employee ID, or Email.</em>
                   </div>
                 </div>
 
@@ -878,7 +917,7 @@ export default function StaffPage() {
                         onChange={(e) => setEditFormData((p) => ({ ...p, user_role: e.target.value }))}
                       >
                         {USER_ROLES.map((r) => (
-                          <option key={r} value={r}>{r}</option>
+                          <option key={r.value} value={r.value}>{r.label}</option>
                         ))}
                       </select>
                     </div>

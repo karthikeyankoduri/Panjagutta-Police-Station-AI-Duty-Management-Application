@@ -1,12 +1,20 @@
 "use client";
-import { useState, FormEvent } from "react";
+import { useEffect, useState, FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 
+// Evaluation shortcuts. Hidden when the frontend is built with NEXT_PUBLIC_DEMO_MODE=false (production).
+const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE !== "false";
 const QUICK_ACCOUNTS = [
   { username: "admin_si_demo", label: "Admin SI", password: "Demo@AdminSI#2024!" },
-  { username: "pg-001", label: "Station SHO (pg-001)", password: "Password@PJ2024!" },
+  { username: "sho_panjagutta", label: "Station SHO", password: "Password@PJ2024!" },
+  { username: "staff_demo", label: "Staff Demo", password: "Demo@Staff#2024!" },
 ];
+
+function landingFor(user: { role: string; must_change_password: boolean }) {
+  if (user.must_change_password) return "/change-password";
+  return user.role === "STAFF" ? "/roster" : "/dashboard";
+}
 
 export default function LoginPage() {
   const { login } = useAuth();
@@ -14,15 +22,21 @@ export default function LoginPage() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("expired")) {
+      setNotice("Your session ended (signed out or inactive). Please sign in again.");
+    }
+  }, []);
+
+  const doLogin = async (u: string, p: string) => {
     setError("");
     setLoading(true);
     try {
-      await login(username, password);
-      router.push("/dashboard");
+      const loggedInUser = await login(u, p);
+      router.push(landingFor(loggedInUser));
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Login failed. Check credentials.");
     } finally {
@@ -30,50 +44,43 @@ export default function LoginPage() {
     }
   };
 
-  const handleQuickLogin = async (acc: typeof QUICK_ACCOUNTS[0]) => {
-    setUsername(acc.username);
-    setPassword(acc.password);
-    setError("");
-    setLoading(true);
-    try {
-      await login(acc.username, acc.password);
-      router.push("/dashboard");
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Login failed. Check credentials.");
-    } finally {
-      setLoading(false);
+  const handleSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    if (!username.trim() || !password) {
+      setError("Enter your station ID and password.");
+      return;
     }
+    doLogin(username.trim(), password);
   };
 
   return (
     <div className="login-page">
       <div className="login-card">
-        {/* Logo / Header */}
         <div className="login-card__logo">
           <div style={{ fontSize: 36, marginBottom: 8 }}>🚔</div>
           <div className="login-card__station-name">Panjagutta Police Station</div>
-          <div className="login-card__system-name">AI Duty Management System</div>
+          <div className="login-card__system-name">Hyderabad City Police · Duty Management</div>
         </div>
 
-        {/* Demo warning */}
         <div className="login-card__demo-notice">
-          ⚠ <strong>PANJAGUTTA POLICE STATION PORTAL</strong><br />
-          Sign in using your assigned credentials or Station ID.
+          <strong>AUTHORIZED PERSONNEL ONLY</strong><br />
+          Sign in with your assigned credentials. Every sign-in attempt is recorded.
         </div>
 
-        {/* Login form */}
+        {notice && (
+          <div role="status" className="alert-banner alert-banner--info" style={{ marginBottom: 12 }}>{notice}</div>
+        )}
+
         <form onSubmit={handleSubmit} noValidate>
           <div className="form-group">
-            <label className="form-label" htmlFor="username">
-              Station ID / Username / Employee ID / Email
-            </label>
+            <label className="form-label" htmlFor="username">Station ID / Username / Service Number</label>
             <input
               id="username"
               type="text"
               className="form-input"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              placeholder="e.g. pg-001, 1417195, or admin_si_demo"
+              placeholder="e.g. pg-001"
               autoComplete="username"
               required
               disabled={loading}
@@ -94,26 +101,9 @@ export default function LoginPage() {
             />
           </div>
 
-          {/* Credential Helper Info */}
-          <div
-            style={{
-              background: "#eff6ff",
-              border: "1px solid #bfdbfe",
-              borderRadius: 8,
-              padding: "10px 12px",
-              marginBottom: 16,
-              fontSize: 12,
-              color: "#1e40af",
-              lineHeight: 1.5,
-            }}
-          >
-            <div style={{ fontWeight: 700, marginBottom: 2 }}>🔑 Imported Personnel Credentials:</div>
-            <div>• <strong>Login ID:</strong> Station ID (e.g. <code>pg-001</code>), HRMS Employee ID, or Email</div>
-            <div>• <strong>Default Password:</strong> <code>Password@PJ2024!</code></div>
-          </div>
-
           {error && (
             <div role="alert" style={{ background: "#fee2e2", border: "1px solid #fca5a5", borderRadius: 8, padding: "10px 14px", color: "#991b1b", fontSize: 13, marginBottom: 16 }}>
+              {error.toLowerCase().includes("locked") && <strong>🔒 Account locked. </strong>}
               {error}
             </div>
           )}
@@ -127,30 +117,34 @@ export default function LoginPage() {
           >
             {loading ? <><span className="spinner" style={{ width: 16, height: 16, borderWidth: 2 }} /> Signing in...</> : "Sign In"}
           </button>
+          <div style={{ fontSize: 11, color: "#64748b", marginTop: 10, textAlign: "center" }}>
+            Accounts lock after 5 failed attempts. First-time users must set a new password.
+          </div>
         </form>
 
-        {/* Quick Login Shortcuts */}
-        <div style={{ marginTop: 20 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 10, textAlign: "center" }}>
-            Quick Access Logins
+        {DEMO_MODE && (
+          <div style={{ marginTop: 20 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 10, textAlign: "center" }}>
+              Evaluation accounts (demo builds only)
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
+              {QUICK_ACCOUNTS.map((acc) => (
+                <button
+                  key={acc.username}
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => { setUsername(acc.username); setPassword(acc.password); doLogin(acc.username, acc.password); }}
+                  disabled={loading}
+                  style={{ justifyContent: "center", fontSize: 11, padding: "6px 4px" }}
+                  id={`demo-${acc.username}`}
+                  title={`Login as ${acc.label} (${acc.username})`}
+                >
+                  {acc.label}
+                </button>
+              ))}
+            </div>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-            {QUICK_ACCOUNTS.map((acc) => (
-              <button
-                key={acc.username}
-                type="button"
-                className="btn btn-secondary btn-sm"
-                onClick={() => handleQuickLogin(acc)}
-                disabled={loading}
-                style={{ justifyContent: "center", fontSize: 11, padding: "6px 8px" }}
-                id={`demo-${acc.username}`}
-                title={`Login as ${acc.label} (${acc.username})`}
-              >
-                {acc.label}
-              </button>
-            ))}
-          </div>
-        </div>
+        )}
       </div>
     </div>
   );

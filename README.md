@@ -1,158 +1,102 @@
-# Panjagutta Police Station — AI Duty Management System
+# Panjagutta Police Station — Duty Management System
 
-> **⚠ PROTOTYPE EVALUATION NOTICE:**  
-> This software is a functional prototype built strictly to the specifications of the Panjagutta Police Station 21-page Build Guide and 7-slide Architecture Presentation. All personnel profiles, names, service numbers, and operational events included in the default seeds are **entirely fabricated for demonstration purposes**. Formal security and compliance review by the Telangana Police Department is required prior to live operational deployment.
+Centralized duty management for Panjagutta Police Station, Hyderabad City Police: staff register, versioned shift rosters with rule checks and SHO approval, attendance, leave, outside movements, tasks, attachments, a live availability dashboard, reports and an audit trail. Staff use the web app or the Android app.
 
----
+> **Before operational use:** the rotation, rest and approval rules are provisional until the SHO signs [docs/policy-confirmation.md](docs/policy-confirmation.md), and the bundled staff data is for evaluation. A department security review is required ([docs/security-and-deployment.md](docs/security-and-deployment.md)).
 
-## 1. Overview & Architecture
-
-The **Panjagutta Police Station Duty Management System** is a centralized, role-governed operational platform designed to automate shift scheduling, enforce mandatory rest periods, track outside court/crime movements, reconcile physical attendance against rosters, and prevent coverage deficits across the station's five sectors.
+## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                 Next.js 16 (App Router)                     │
-│    13 Reactive Operational Screens + Tailwind/Vanilla CSS   │
-│   (Dashboard, Staff, Roster, Allocation, Attendance, etc.)  │
-└──────────────────────────────┬──────────────────────────────┘
-                               │ HTTPS / JSON REST API (JWT)
-┌──────────────────────────────▼──────────────────────────────┐
-│                    FastAPI Backend Core                     │
-│    RBAC Dependencies • Lifespan Scheduler • Audit Engine     │
-│   Availability Service • Reports Generator • AI Copilot     │
-└──────────────┬──────────────────────────────┬───────────────┘
-               │ SQLAlchemy Async ORM         │ APScheduler
-┌──────────────▼──────────────┐┌──────────────▼───────────────┐
-│        PostgreSQL 15        ││    Background Job Runner     │
-│  Staff, Rosters, Movements, ││ Overdue Movement Detection,  │
-│  Attendance, Immutable Logs ││ Stalled Approvals Alerting   │
-└─────────────────────────────┘└──────────────────────────────┘
+Browser (Next.js 16)        Android app (Java)
+        │  HTTPS                    │  HTTPS
+        └────────────┬──────────────┘
+              nginx (TLS, /  and /api)
+                     │
+             FastAPI backend ── APScheduler jobs (overdue, stalled, expired attachments)
+                     │
+              PostgreSQL 15 (Alembic migrations, append-only audit trigger)
 ```
 
-### Technology Stack
-- **Frontend:** Next.js 16 (App Router) + TypeScript + React 19 + Vanilla CSS Design Tokens
-- **Backend:** Python 3.11+ + FastAPI + Pydantic v2
-- **Database:** PostgreSQL 15 + SQLAlchemy 2.0 (Asyncpg) + Alembic
-- **Authentication:** JWT Bearer tokens + RBAC + account lockout protection
-- **Background Jobs:** APScheduler (overdue movement detection & stalled approval monitoring)
-- **AI / LLM Layer:** Explainable, on-premises rule-based heuristics & local draft advisory copilot
-- **Reporting:** Server-side CSV & printable shift-end handover and vacancy reports
-- **Containerization:** Multi-stage Docker & Docker Compose
+| Layer | Technology |
+|:--|:--|
+| Web | Next.js 16 (App Router), React 19, TypeScript |
+| Android | Native Java, minSdk 23, targetSdk 35 |
+| API | Python 3.11, FastAPI, SQLAlchemy 2 (async), Pydantic 2 |
+| Database | PostgreSQL 15 (SQLite for local development only) |
+| Jobs | APScheduler |
+| Reports | Server-side PDF (ReportLab), Excel (openpyxl), CSV |
+| Deployment | Docker Compose with an nginx HTTPS proxy |
 
----
-
-## 2. Default Seed Accounts (Demo Logins)
-
-The system includes pre-configured demo user accounts mapped to the station hierarchy:
-
-| Role | Username | Password | Operational Responsibility |
-|:---|:---|:---|:---|
-| **SHO** (Station House Officer) | `sho_demo` | `Demo@SHO#2024!` | Station Commander; formal policy confirmation; approves final rosters. |
-| **DI** (Detective Inspector / Crime) | `di_demo` | `Demo@DI#2024!` | Crime division in-charge; authorizes investigative movements & tasks. |
-| **Admin SI** (General Administration) | `admin_si_demo` | `Demo@AdminSI#2024!` | Prepares draft rosters; manages muster roll; assigns duty points. |
-| **Sector 1 SI** (Field Sector In-Charge)| `sector1_si_demo`| `Demo@Sec1SI#2024!` | Scoped to Sector 1; monitors Blue Colts motorcycle beats & patrols. |
-| **Sector 2 SI** (Field Sector In-Charge)| `sector2_si_demo`| `Demo@Sec2SI#2024!` | Scoped to Sector 2; monitors commercial beat patrols. |
-| **Duty SI** (Station Duty Officer) | `dsi_demo` | `Demo@DSI#2024!` | Oversees daily roll-call; logs physical attendance; sentry checks. |
-| **Staff Officer** (Beat Constable) | `staff_demo` | `Demo@Staff#2024!` | Views personal duty allocations; submits leave requests. |
-
----
-
-## 3. Quick Start (Docker Compose — Recommended)
-
-The simplest way to spin up the complete application stack (PostgreSQL, Backend API, Frontend UI) is using Docker Compose:
+## Quick start (Docker — one command)
 
 ```bash
-# 1. Clone repository and navigate to root
-cd "panjagutta ai application"
-
-# 2. Build and launch all containers
+cp .env.example .env          # set every CHANGE value; generate secrets with: openssl rand -base64 48
 docker compose up -d --build
-
-# 3. Initialize database tables and run migrations
-docker compose exec backend alembic upgrade head
-
-# 4. Seed fabricated demo personnel and shift configuration
-docker compose exec backend python -m app.db.seed
-
-# 5. Access the application:
-#    - Frontend Dashboard: http://localhost:3000
-#    - FastAPI Swagger Docs: http://localhost:8000/api/docs
-#    - Backend Health Check: http://localhost:8000/api/health
 ```
 
----
+Open `https://localhost/` (a self-signed certificate is created for evaluation; install the department certificate in `docker/certs/` for real use). The API docs are at `https://localhost/api/docs`.
 
-## 4. Local Development Setup (Manual)
+On first start the backend applies migrations and loads the Build Guide §4 configuration (sectors, shifts, duty requirements, lists). With `SEED_DEMO_DATA=false` (the default in `.env.example`) no demo accounts exist — import the staff register as the first administrator, or set `SEED_DEMO_DATA=true` and `APP_ENV=development` on an evaluation server.
 
-### Prerequisites
-- Python 3.11+
-- Node.js v18+ & npm
-- PostgreSQL 14+ running locally (or SQLite for local lightweight testing)
+## Local development
 
-### Step 1: Backend Setup
 ```bash
+# Backend
 cd backend
-
-# Create and activate python virtual environment
-python -m venv .venv
-# On Windows:
-.venv\Scripts\activate
-# On Linux/macOS:
-source .venv/bin/activate
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Copy environment variables
-copy .env.example .env
-
-# Run database migrations
-alembic upgrade head
-
-# Seed initial configuration and demo users
-python -m app.db.seed
-
-# Start FastAPI server
+python -m venv .venv && .venv\Scripts\activate      # Linux/macOS: source .venv/bin/activate
+pip install -r requirements-dev.txt
+copy .env.example .env                                # SQLite works: DATABASE_URL=sqlite+aiosqlite:///./panjagutta_local.db
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-```
+python -m app.db.seed                                 # optional demo staff and accounts (development only)
 
-### Step 2: Frontend Setup
-```bash
+# Web
 cd frontend
-
-# Install npm dependencies
 npm install
+npm run dev                                           # http://localhost:3000 (calls the API on port 8000)
 
-# Start Next.js development server
-npm run dev
-
-# Open http://localhost:3000 in your browser
+# Android (debug build may use http:// for a development server)
+cd mobile-android
+./gradlew assembleDebug -PAPI_BASE_URL=http://<your-pc-ip>:8000
 ```
 
----
+### Demo accounts (development only, `SEED_DEMO_DATA=true`)
 
-## 5. Running Automated Tests
+| Role | Username | Password |
+|:--|:--|:--|
+| SHO | `sho_demo` / `sho_panjagutta` | `Demo@SHO#2024!` / `Password@PJ2024!` |
+| Admin SI | `admin_si_demo` | `Demo@AdminSI#2024!` |
+| Sector 1 SI | `sector1_si_demo` | `Demo@Sec1SI#2024!` |
+| DI | `di_demo` | `Demo@DI#2024!` |
+| DSI | `dsi_demo` | `Demo@DSI#2024!` |
+| Staff | `staff_demo` | `Demo@Staff#2024!` |
 
-A dedicated test suite validates the deterministic **Availability Engine**, status priority ordering, leave exclusions, and shift configuration consistency:
+Imported staff sign in with their station ID and the provisioning password, and must set their own password at first sign-in. Demo accounts are never created when `APP_ENV=production`.
+
+## Tests and CI
 
 ```bash
-cd backend
-pytest tests/ -v
+cd backend && python -m pytest -q          # 200+ tests: availability engine, every validation rule, roles, scenarios, auth, audit, exports
+cd frontend && npm run lint && npm run build
+cd mobile-android && ./gradlew assembleDebug
 ```
 
----
+GitHub Actions (`.github/workflows/ci.yml`) runs all three on every push, plus an Alembic upgrade/downgrade/upgrade check against PostgreSQL.
 
-## 6. Detailed Documentation Index
+## Backups
 
-Extensive technical specifications and operational runbooks are located in the `docs/` directory:
+```bash
+scripts/backup.sh                                        # encrypted (AES-256) nightly dump
+scripts/restore.sh backups/<file>.sql.gz.gpg --drill     # restore drill into a scratch database
+```
 
-- [Requirements Traceability Matrix](file:///c:/Users/karthu/Desktop/HCP%20Projects/panjagutta%20ai%20application/docs/requirements-traceability.md): Complete mapping of PDF pages 1–21 and Presentation slides 1–7 to source code and tests.
-- [Station Policy Confirmation](file:///c:/Users/karthu/Desktop/HCP%20Projects/panjagutta%20ai%20application/docs/policy-confirmation.md): Details of the Section 1 Policy Gate, rest intervals, and open SHO decisions.
-- [Security & Deployment Runbook](file:///c:/Users/karthu/Desktop/HCP%20Projects/panjagutta%20ai%20application/docs/security-and-deployment.md): Role matrix, password hashing, session revocation, immutable audit logs, and on-premises air-gapped guidelines.
-- [Station User Guide](file:///c:/Users/karthu/Desktop/HCP%20Projects/panjagutta%20ai%20application/docs/user-guide.md): Step-by-step instructions for SHO, Admin SI, Sector SI, and Staff workflows.
+## Documentation
 
----
-
-## 7. License & Compliance
-
-Developed strictly for police operations research and demonstration prototyping under the Hyderabad City Police modernization initiative. All rights reserved.
+- [Build Guide](docs/Panjagutta%20AI%20Application%20Police%20Station%20Staff%20Duty%20Management%20Application%20Build%20Guide.md) — the specification
+- [Compliance report](docs/build-guide-compliance-report.md) — what is implemented against the guide
+- [Requirements traceability](docs/requirements-traceability.md) — guide sections and blueprint steps → code → tests
+- [SHO rules sheet](docs/policy-confirmation.md) — decisions to sign before operational use
+- [Role matrix for SOP §10](docs/role-matrix-for-sho.md)
+- [Security and deployment](docs/security-and-deployment.md) — access control, audit, HTTPS, backups, hardening checklist
+- [Pilot and rollout plan](docs/pilot-and-rollout-plan.md)
+- [Mobile device policy (draft)](docs/mobile-device-policy-draft.md)
+- [User guide](docs/user-guide.md) — and the in-app **Workflow Guide**

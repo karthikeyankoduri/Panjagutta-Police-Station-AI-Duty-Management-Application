@@ -55,7 +55,7 @@ def run_test():
 
     # 6. Test editing staff & user profile
     # Let's find SHO in the staff list
-    sho_staff = next((s for s in all_staff if s["service_number"] == "PJ-SHO-001"), None)
+    sho_staff = next((s for s in all_staff if s["service_number"] in ("pg-001", "PJ-SHO-001")), None)
     assert sho_staff is not None, "SHO staff not found in imported list!"
     print(f"Found SHO: {sho_staff['name']}, role: {sho_staff.get('user_role')}")
 

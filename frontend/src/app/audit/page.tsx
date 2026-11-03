@@ -14,6 +14,9 @@ export default function AuditPage() {
   const [actorFilter, setActorFilter] = useState("");
   const [actionFilter, setActionFilter] = useState("");
   const [entityFilter, setEntityFilter] = useState("");
+  const [exceptionsOnly, setExceptionsOnly] = useState(false);
+  const [page, setPage] = useState(0);
+  const PAGE = 50;
 
   const fetchLogs = useCallback(async () => {
     if (!token) return;
@@ -24,6 +27,9 @@ export default function AuditPage() {
         actor: actorFilter || undefined,
         action: actionFilter || undefined,
         entity: entityFilter || undefined,
+        exceptions_only: exceptionsOnly || undefined,
+        limit: PAGE,
+        offset: page * PAGE,
       });
       setLogs(data);
     } catch (err: any) {
@@ -31,7 +37,7 @@ export default function AuditPage() {
     } finally {
       setLoading(false);
     }
-  }, [token, actorFilter, actionFilter, entityFilter]);
+  }, [token, actorFilter, actionFilter, entityFilter, exceptionsOnly, page]);
 
   useEffect(() => {
     fetchLogs();
@@ -43,7 +49,7 @@ export default function AuditPage() {
         <div>
           <h1 className="page-title">Immutable Audit Trail &amp; Integrity Log</h1>
           <div className="page-subtitle">
-            Cryptographic-style audit records of all duty modifications, leave approvals, movements, and system overrides.
+            Append-only record of every sign-in, change, approval and authorized exception: who, what, when, old and new values, and who authorized it.
           </div>
         </div>
         <button className="btn btn-secondary btn-sm" onClick={fetchLogs}>
@@ -92,6 +98,11 @@ export default function AuditPage() {
             />
           </div>
 
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer" }}>
+            <input type="checkbox" checked={exceptionsOnly} onChange={(e) => { setExceptionsOnly(e.target.checked); setPage(0); }} />
+            Authorized exceptions only
+          </label>
+
           {(actorFilter || actionFilter || entityFilter) && (
             <button
               className="btn btn-secondary btn-sm"
@@ -129,6 +140,7 @@ export default function AuditPage() {
                     <th>Actor</th>
                     <th>Action</th>
                     <th>Entity</th>
+                    <th>Authorized by / Reason</th>
                     <th>Modifications / Values</th>
                     <th>Request ID / IP</th>
                   </tr>
@@ -148,6 +160,10 @@ export default function AuditPage() {
                       <td>
                         {log.entity_type} {log.entity_id ? `(#${log.entity_id})` : ""}
                       </td>
+                      <td style={{ fontSize: "11px", maxWidth: 200 }}>
+                        {log.authorizer_username ? <strong>{log.authorizer_username}</strong> : "—"}
+                        {log.exception_reason && <div style={{ color: "#d97706" }}>{log.exception_reason}</div>}
+                      </td>
                       <td style={{ maxWidth: "320px", wordBreak: "break-all" }}>
                         {log.new_values && (
                           <div style={{ color: "#22c55e", fontSize: "11px" }}>
@@ -161,7 +177,7 @@ export default function AuditPage() {
                         )}
                       </td>
                       <td style={{ fontSize: "11px", color: "#64748b" }}>
-                        <div>{log.ip_address || "127.0.0.1"}</div>
+                        <div>{log.ip_address || "—"}</div>
                         <div style={{ fontFamily: "monospace", fontSize: "10px" }}>
                           {log.request_id ? log.request_id.substring(0, 8) + "..." : ""}
                         </div>
@@ -172,6 +188,11 @@ export default function AuditPage() {
               </table>
             </div>
           )}
+        </div>
+        <div className="card__footer" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <button className="btn btn-secondary btn-sm" disabled={page === 0} onClick={() => setPage((p) => p - 1)}>‹ Newer</button>
+          <span style={{ fontSize: 12 }}>Page {page + 1}</span>
+          <button className="btn btn-secondary btn-sm" disabled={logs.length < PAGE} onClick={() => setPage((p) => p + 1)}>Older ›</button>
         </div>
       </div>
     </AppShell>

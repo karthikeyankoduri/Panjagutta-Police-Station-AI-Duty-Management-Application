@@ -22,6 +22,7 @@ from app.db.database import Base
 # ─────────────────────────────────────────────────────────────────────────────
 
 class UserRoleEnum(str, enum.Enum):
+    SUPER_ADMIN = "SUPER_ADMIN"
     SHO = "SHO"
     DI = "DI"
     ADMIN_SI = "ADMIN_SI"
@@ -525,6 +526,69 @@ class Alert(Base):
     resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
+    # De-duplication of open alerts is enforced in code (one unresolved alert per
+    # type/entity). A DB unique constraint on is_resolved would block resolving
+    # the same condition a second time, so it is intentionally not used.
     __table_args__ = (
-        UniqueConstraint("alert_type", "entity_type", "entity_id", "is_resolved", name="uq_alert_dedup"),
+        Index("ix_alert_open", "alert_type", "entity_type", "entity_id", "is_resolved"),
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Notifications — per-user or per-role inbox (web + Android)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class Notification(Base):
+    """In-app notification routed to a specific user or to every user holding a role."""
+    __tablename__ = "notifications"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # Plain integer references (no FK) so that removing users or sectors never
+    # fails because of historical notifications.
+    user_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    role: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
+    sector_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    category: Mapped[str] = mapped_column(String(50), default="info")
+    entity_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    entity_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    read_by: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)  # user ids that read a role notification
+    is_read: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Editable configuration lists (guide §4: sections and status lists in tables)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class Section(Base):
+    """Station sections (Court, Reception, Drivers, ...) — editable by authorized admins."""
+    __tablename__ = "sections"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ConfigListItem(Base):
+    """
+    Display configuration for status/state lists (staff statuses, leave states, task states).
+    The codes are fixed by the rules engine; labels, descriptions, order and visibility are editable.
+    """
+    __tablename__ = "config_list_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    list_name: Mapped[str] = mapped_column(String(50), nullable=False)  # staff_status | leave_status | task_status | leave_type
+    code: Mapped[str] = mapped_column(String(100), nullable=False)
+    label: Mapped[str] = mapped_column(String(150), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("list_name", "code", name="uq_config_list_code"),
     )

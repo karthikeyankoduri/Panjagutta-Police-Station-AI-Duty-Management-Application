@@ -2,276 +2,178 @@
 import { useEffect, useState, useCallback } from "react";
 import AppShell from "@/components/AppShell";
 import { useAuth } from "@/lib/auth-context";
+import { useToday, addDaysIso } from "@/lib/use-today";
 import {
   getShiftEndReport,
+  getDailyReport,
   getDailyVacancyReport,
-  getExportUrl,
+  getWorkloadReport,
+  getPolicyStatus,
+  downloadReport,
+  formatApiError,
+  shiftLabels,
+  ShiftInfo,
 } from "@/lib/api";
 
+type Tab = "shift-end" | "daily" | "vacancy" | "workload";
+const TABS: { key: Tab; label: string }[] = [
+  { key: "shift-end", label: "📋 Shift-end handover" },
+  { key: "daily", label: "🗓 Daily report" },
+  { key: "vacancy", label: "📊 Vacancy report" },
+  { key: "workload", label: "⚖️ Workload report" },
+];
+
+interface Section { title: string; columns: string[]; rows: (string | number | null)[][] }
+
 export default function ReportsPage() {
-  const { token, user } = useAuth();
+  const { token } = useAuth();
+  const [tab, setTab] = useState<Tab>("shift-end");
+  const today = useToday();
   const [reportDate, setReportDate] = useState("");
   const [shiftCode, setShiftCode] = useState("A");
+  const [start, setStart] = useState("");
+  const [end, setEnd] = useState("");
 
   useEffect(() => {
-    if (!reportDate) setReportDate(new Date().toISOString().split("T")[0]);
-  }, [reportDate]);
-  const [activeTab, setActiveTab] = useState<"shift" | "vacancy">("shift");
-  const [shiftData, setShiftData] = useState<any>(null);
-  const [vacancyData, setVacancyData] = useState<any>(null);
+    if (!today) return;
+    setReportDate((d) => d || today);
+    setStart((d) => d || addDaysIso(today, -6));
+    setEnd((d) => d || today);
+  }, [today]);
+  const [shifts, setShifts] = useState<ShiftInfo[]>([]);
+  const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [downloading, setDownloading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const labels = shiftLabels(shifts);
 
-  const fetchReports = useCallback(async () => {
-    if (!token) return;
+  useEffect(() => {
+    if (token) getPolicyStatus(token).then((p) => setShifts(p.shifts)).catch(() => null);
+  }, [token]);
+
+  const fetchReport = useCallback(async () => {
+    if (!token || !reportDate) return;
     setLoading(true);
     setError(null);
     try {
-      if (activeTab === "shift") {
-        const data = await getShiftEndReport(token, reportDate, shiftCode);
-        setShiftData(data);
-      } else {
-        const data = await getDailyVacancyReport(token, reportDate);
-        setVacancyData(data);
-      }
+      if (tab === "shift-end") setData(await getShiftEndReport(token, reportDate, shiftCode));
+      else if (tab === "daily") setData(await getDailyReport(token, reportDate));
+      else if (tab === "vacancy") setData(await getDailyVacancyReport(token, reportDate));
+      else setData(await getWorkloadReport(token, start, end));
     } catch (err: any) {
-      setError(err.message || "Failed to load report data");
+      setError(formatApiError(err, "Failed to load report"));
+      setData(null);
     } finally {
       setLoading(false);
     }
-  }, [token, reportDate, shiftCode, activeTab]);
+  }, [token, tab, reportDate, shiftCode, start, end]);
 
-  useEffect(() => {
-    fetchReports();
-  }, [fetchReports]);
+  useEffect(() => { fetchReport(); }, [fetchReport]);
 
-  const handleDownloadCsv = () => {
-    const url = getExportUrl(activeTab === "shift" ? "shift-end" : "daily-vacancy", reportDate, shiftCode);
-    window.open(url, "_blank");
+  const handleDownload = async (format: "csv" | "xlsx" | "pdf") => {
+    if (!token) return;
+    setDownloading(format);
+    try {
+      await downloadReport(token, tab, format, { date: reportDate, shift: shiftCode, start, end });
+    } catch (err: any) {
+      setError(formatApiError(err, "Export failed"));
+    } finally {
+      setDownloading(null);
+    }
   };
+
+  const sections: Section[] = data?.sections || [];
 
   return (
     <AppShell>
       <div className="page-header">
         <div>
           <h1 className="page-title">Station Reports &amp; Exports</h1>
-          <div className="page-subtitle">
-            Shift-end handover reports, daily sector vacancy tracking, and server-side CSV/audit exports.
-          </div>
+          <div className="page-subtitle">Generated from records using the same rules as the dashboard. Export as PDF, Excel or CSV.</div>
         </div>
-        <div style={{ display: "flex", gap: "10px" }}>
-          <button className="btn btn-secondary btn-sm" onClick={() => window.print()}>
-            🖨 Print Report
-          </button>
-          <button className="btn btn-primary btn-sm" onClick={handleDownloadCsv}>
-            ⬇ Export to CSV
-          </button>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button className="btn btn-secondary btn-sm" onClick={() => window.print()}>🖨 Print</button>
+          {(["pdf", "xlsx", "csv"] as const).map((f) => (
+            <button key={f} className="btn btn-primary btn-sm" onClick={() => handleDownload(f)} disabled={!!downloading || loading}>
+              {downloading === f ? "Preparing…" : `⬇ ${f === "xlsx" ? "Excel" : f.toUpperCase()}`}
+            </button>
+          ))}
         </div>
       </div>
 
-      {error && <div className="alert-banner alert-banner--warning" style={{ marginBottom: "16px" }}>{error}</div>}
+      {error && <div role="alert" className="alert-banner alert-banner--warning" style={{ marginBottom: 16 }}>{error}</div>}
 
-      {/* Tabs and Controls */}
-      <div className="card" style={{ marginBottom: "20px" }}>
-        <div className="card__body" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "16px" }}>
-          <div style={{ display: "flex", gap: "10px" }}>
-            <button
-              className={`btn btn-sm ${activeTab === "shift" ? "btn-primary" : "btn-secondary"}`}
-              onClick={() => setActiveTab("shift")}
-            >
-              📋 Shift-End Handover Report
-            </button>
-            <button
-              className={`btn btn-sm ${activeTab === "vacancy" ? "btn-primary" : "btn-secondary"}`}
-              onClick={() => setActiveTab("vacancy")}
-            >
-              📊 Daily Sector Vacancy Report
-            </button>
+      <div className="card" style={{ marginBottom: 20 }}>
+        <div className="card__body" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 16 }}>
+          <div role="tablist" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {TABS.map((t) => (
+              <button key={t.key} role="tab" aria-selected={tab === t.key} className={`btn btn-sm ${tab === t.key ? "btn-primary" : "btn-secondary"}`} onClick={() => setTab(t.key)}>
+                {t.label}
+              </button>
+            ))}
           </div>
-
-          <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-              <label style={{ fontSize: "12px", fontWeight: 600 }}>Date:</label>
-              <input
-                type="date"
-                className="form-control"
-                value={reportDate}
-                onChange={(e) => setReportDate(e.target.value)}
-                style={{ width: "150px" }}
-              />
-            </div>
-
-            {activeTab === "shift" && (
-              <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                <label style={{ fontSize: "12px", fontWeight: 600 }}>Shift:</label>
-                <select
-                  className="form-control"
-                  value={shiftCode}
-                  onChange={(e) => setShiftCode(e.target.value)}
-                  style={{ width: "120px" }}
-                >
-                  <option value="A">Shift A</option>
-                  <option value="B">Shift B</option>
-                  <option value="C">Shift C</option>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            {tab === "workload" ? (
+              <>
+                <label style={{ fontSize: 13 }}>From <input type="date" className="form-control" value={start} onChange={(e) => setStart(e.target.value)} style={{ display: "inline-block", width: 150 }} /></label>
+                <label style={{ fontSize: 13 }}>To <input type="date" className="form-control" value={end} onChange={(e) => setEnd(e.target.value)} style={{ display: "inline-block", width: 150 }} /></label>
+              </>
+            ) : (
+              <label style={{ fontSize: 13 }}>Date <input type="date" className="form-control" value={reportDate} onChange={(e) => setReportDate(e.target.value)} style={{ display: "inline-block", width: 150 }} /></label>
+            )}
+            {tab === "shift-end" && (
+              <label style={{ fontSize: 13 }}>Shift{" "}
+                <select className="form-control" value={shiftCode} onChange={(e) => setShiftCode(e.target.value)} style={{ display: "inline-block", width: 170 }}>
+                  {["A", "B", "C"].map((s) => <option key={s} value={s}>Shift {s}{labels[s] ? ` (${labels[s]})` : ""}</option>)}
                 </select>
-              </div>
+              </label>
             )}
           </div>
         </div>
       </div>
 
-      {/* Report Content */}
       {loading ? (
-        <div className="card">
-          <div className="card__body" style={{ textAlign: "center", padding: "40px", color: "#94a3b8" }}>
-            Generating report data...
+        <div className="loading-overlay"><div className="spinner" /> Generating report…</div>
+      ) : data && (
+        <div className="card printable-report">
+          <div className="card__header" style={{ display: "block" }}>
+            <div style={{ fontSize: 11, letterSpacing: ".08em", color: "#64748b", fontWeight: 700 }}>HYDERABAD CITY POLICE — PANJAGUTTA POLICE STATION</div>
+            <h2 className="card__title" style={{ marginTop: 4 }}>{data.report_type}</h2>
+            <div className="text-muted" style={{ fontSize: 12 }}>
+              {data.report_date && `Date ${data.report_date}`}
+              {data.shift_code && ` · Shift ${data.shift_code}`}
+              {data.shift_window && ` (${data.shift_window})`}
+              {data.start_date && `${data.start_date} to ${data.end_date}`}
+              {data.roster_version != null && ` · Roster v${data.roster_version}`}
+              {data.sector_scoped && ` · Sector ${data.sector_id} only`}
+              {` · Generated ${new Date(data.generated_at).toLocaleString()} by ${data.generated_by}`}
+            </div>
+            {data.note && <div className="text-muted" style={{ fontSize: 12, marginTop: 4 }}>{data.note}</div>}
+          </div>
+          <div className="card__body">
+            {sections.map((sec) => (
+              <div key={sec.title} style={{ marginBottom: 20 }}>
+                <h3 style={{ fontSize: 15, margin: "0 0 8px" }}>{sec.title}</h3>
+                {sec.rows.length === 0 ? (
+                  <div className="text-muted" style={{ fontSize: 13 }}>No records.</div>
+                ) : (
+                  <div className="table-wrapper">
+                    <table className="table">
+                      <thead><tr>{sec.columns.map((c) => <th key={c}>{c}</th>)}</tr></thead>
+                      <tbody>
+                        {sec.rows.map((row, i) => (
+                          <tr key={i}>{row.map((v, j) => <td key={j}>{v === null || v === "" ? "—" : String(v)}</td>)}</tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            ))}
+            {data.disclaimer && <div className="text-muted" style={{ fontSize: 11 }}>{data.disclaimer}</div>}
           </div>
         </div>
-      ) : activeTab === "shift" && shiftData ? (
-        <div>
-          {/* Shift Report Header Card */}
-          <div className="card" style={{ marginBottom: "20px" }}>
-            <div className="card__header" style={{ display: "flex", justifyContent: "space-between" }}>
-              <div>
-                <span className="card__title">Shift-End Handover Report &middot; Panjagutta PS</span>
-                <div style={{ fontSize: "12px", color: "#94a3b8", marginTop: "4px" }}>
-                  Date: {shiftData.report_date} &middot; Shift: {shiftData.shift_code} &middot; Officer: {shiftData.generated_by}
-                </div>
-              </div>
-              <span className="badge badge-info" style={{ height: "fit-content" }}>
-                OFFICIAL RECORD
-              </span>
-            </div>
-            <div className="card__body">
-              {/* Headcount Metrics */}
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "16px", marginBottom: "20px" }}>
-                <div style={{ background: "#0f172a", padding: "14px", borderRadius: "6px", textAlign: "center" }}>
-                  <div style={{ fontSize: "22px", fontWeight: 700, color: "#e2e8f0" }}>
-                    {shiftData.headcount.total_sanctioned_strength}
-                  </div>
-                  <div style={{ fontSize: "12px", color: "#94a3b8" }}>Station Strength</div>
-                </div>
-                <div style={{ background: "#0f172a", padding: "14px", borderRadius: "6px", textAlign: "center" }}>
-                  <div style={{ fontSize: "22px", fontWeight: 700, color: "#38bdf8" }}>
-                    {shiftData.headcount.scheduled_for_shift}
-                  </div>
-                  <div style={{ fontSize: "12px", color: "#94a3b8" }}>Scheduled Strength</div>
-                </div>
-                <div style={{ background: "#0f172a", padding: "14px", borderRadius: "6px", textAlign: "center" }}>
-                  <div style={{ fontSize: "22px", fontWeight: 700, color: "#22c55e" }}>
-                    {shiftData.headcount.confirmed_present}
-                  </div>
-                  <div style={{ fontSize: "12px", color: "#94a3b8" }}>Confirmed Present</div>
-                </div>
-                <div style={{ background: "#0f172a", padding: "14px", borderRadius: "6px", textAlign: "center" }}>
-                  <div style={{ fontSize: "22px", fontWeight: 700, color: shiftData.headcount.deficit > 0 ? "#ef4444" : "#22c55e" }}>
-                    {shiftData.headcount.deficit}
-                  </div>
-                  <div style={{ fontSize: "12px", color: "#94a3b8" }}>Shift Deficit</div>
-                </div>
-              </div>
-
-              {/* Sub-summaries */}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px" }}>
-                <div style={{ background: "#0f172a", padding: "16px", borderRadius: "6px" }}>
-                  <h3 style={{ fontSize: "14px", color: "#38bdf8", marginBottom: "10px" }}>Outside Movements</h3>
-                  <div style={{ fontSize: "13px", lineHeight: "1.8" }}>
-                    <div>Total Movements Logged: <strong>{shiftData.movements.total}</strong></div>
-                    <div>Active Outside: <strong>{shiftData.movements.open}</strong></div>
-                    <div>Overdue Alerts: <strong style={{ color: shiftData.movements.overdue > 0 ? "#ef4444" : "inherit" }}>{shiftData.movements.overdue}</strong></div>
-                    <div>Safely Returned: <strong>{shiftData.movements.returned}</strong></div>
-                  </div>
-                </div>
-
-                <div style={{ background: "#0f172a", padding: "16px", borderRadius: "6px" }}>
-                  <h3 style={{ fontSize: "14px", color: "#38bdf8", marginBottom: "10px" }}>Special Tasks &amp; Warrants</h3>
-                  <div style={{ fontSize: "13px", lineHeight: "1.8" }}>
-                    <div>Total Assigned Tasks: <strong>{shiftData.tasks.total}</strong></div>
-                    <div>Completed During Shift: <strong>{shiftData.tasks.completed}</strong></div>
-                    <div>In Progress / Ongoing: <strong>{shiftData.tasks.in_progress}</strong></div>
-                    <div>Overdue Tasks: <strong style={{ color: shiftData.tasks.overdue > 0 ? "#ef4444" : "inherit" }}>{shiftData.tasks.overdue}</strong></div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Sample Deployments Table */}
-          <div className="card">
-            <div className="card__header">
-              <span className="card__title">Duty Deployments Log ({shiftData.total_deployments} recorded)</span>
-            </div>
-            <div className="card__body" style={{ padding: 0 }}>
-              <div className="table-container">
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th>Officer</th>
-                      <th>Service #</th>
-                      <th>Assigned Duty</th>
-                      <th>Section / Sector</th>
-                      <th>Notes</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {shiftData.deployments_sample.map((d: any, idx: number) => (
-                      <tr key={idx}>
-                        <td><strong>{d.staff_name}</strong></td>
-                        <td>{d.service_number}</td>
-                        <td><span className="badge badge-info">{d.duty_name}</span></td>
-                        <td>{d.section || "Station Wide"}</td>
-                        <td style={{ fontSize: "12px", color: "#94a3b8" }}>{d.notes || "—"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : activeTab === "vacancy" && vacancyData ? (
-        <div className="card">
-          <div className="card__header">
-            <span className="card__title">Daily Sector Strength &amp; Vacancy Analysis</span>
-          </div>
-          <div className="card__body" style={{ padding: 0 }}>
-            <div className="table-container">
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>Sector Name</th>
-                    <th>Code</th>
-                    <th>Currently Assigned</th>
-                    <th>Minimum Target</th>
-                    <th>Deficit</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {vacancyData.sectors.map((s: any) => (
-                    <tr key={s.sector_id}>
-                      <td><strong>{s.sector_name}</strong></td>
-                      <td>{s.code}</td>
-                      <td><strong>{s.assigned_staff}</strong></td>
-                      <td>{s.minimum_target}</td>
-                      <td>
-                        <span style={{ color: s.deficit > 0 ? "#ef4444" : "#22c55e", fontWeight: 600 }}>
-                          {s.deficit}
-                        </span>
-                      </td>
-                      <td>
-                        <span className={`badge ${s.status === "Adequate" ? "badge-success" : "badge-warning"}`}>
-                          {s.status}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      )}
     </AppShell>
   );
 }

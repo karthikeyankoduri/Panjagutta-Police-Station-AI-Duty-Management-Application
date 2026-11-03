@@ -57,3 +57,14 @@ yarn-error.log*
 *~
 .DS_Store
 Thumbs.db
+
+# Deployment artefacts (never commit)
+docker/certs/
+backups/
+*.sql.gz.gpg
+
+# Stray copies / tool artefacts
+mobile-android/mobile-android/
+mobile-android/.artifacts/
+mobile-android/app/build/
+backend/generated_reports/

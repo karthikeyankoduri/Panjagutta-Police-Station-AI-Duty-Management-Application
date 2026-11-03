@@ -1,45 +1,64 @@
-# Requirements Traceability Matrix — Panjagutta Police Station Duty Management
+# Requirements Traceability — Build Guide to Implementation
 
-This document provides complete traceability between the source specification documents (21-page PDF Build Guide and 7-slide Presentation Deck) and the implementation source files, database models, and test scenarios.
+Maps each Build Guide section and blueprint step to the code and to the automated test that proves it. Status is **Done** (implemented and tested), **Done (untested)** or **Needs SHO** (blocked on a decision). For the full gap analysis see [build-guide-compliance-report.md](build-guide-compliance-report.md).
 
----
+Test files are in `backend/tests/`. Run them with `cd backend && python -m pytest -q`.
 
-## 1. PDF Page-by-Page Traceability (Pages 1 to 21)
+## Build Guide sections
 
-| PDF Page | Topic / Specification Requirement | Implementation Code / File | Verification & Test Evidence | Status |
-|:---|:---|:---|:---|:---:|
-| **Page 1** | Cover & Project Vision: AI-assisted duty management for Panjagutta PS | `backend/app/main.py`<br>`frontend/src/app/page.tsx` | App startup & root health endpoints | Complete |
-| **Page 2** | Executive Summary & High-Level Architecture | `docker-compose.yml`<br>`backend/app/core/config.py` | PostgreSQL + FastAPI + Next.js orchestration | Complete |
-| **Page 3** | Station Hierarchy: SHO &rarr; DI &rarr; Admin SI &rarr; Sector SIs &rarr; DSI &rarr; Staff | `backend/app/models/models.py` (`UserRoleEnum`, `Sector`, `Staff`) | Role definitions & sector scoping | Complete |
-| **Page 4** | Shift Definitions (Shift A 07:00-15:00, Shift B 15:00-23:00, Shift C 23:00-07:00) | `backend/app/models/models.py` (`ShiftConfig`)<br>`backend/app/api/routes/policy.py` | `test_shift_config_matches_spec` | Complete |
-| **Page 5** | 12 Staff Statuses, 4 Leave States, 5 Task States, Designation hierarchy | `backend/app/models/models.py` (`StaffStatus`, `LeaveStatus`, `TaskStatus`) | `test_status_enum_values_match_spec`<br>`test_leave_status_enum_matches_spec`<br>`test_task_status_enum_matches_spec` | Complete |
-| **Page 6** | Recommended Technology Stack: FastAPI, Next.js, PostgreSQL, APScheduler | `backend/requirements.txt`<br>`frontend/package.json` | Dependency manifests and build scripts | Complete |
-| **Page 7** | Eight Service Areas & Core Design Principles | `backend/app/services/`<br>`backend/app/api/routes/` | Availability engine, scheduler, audit trail | Complete |
-| **Page 8** | Data Architecture: Staff Register & Service Number uniqueness | `backend/app/models/models.py` (`Staff.service_number`) | Unique constraint on service number | Complete |
-| **Page 9** | Immutable Audit Log & Append-Only Recordkeeping | `backend/app/models/models.py` (`AuditLog`)<br>`backend/app/services/audit.py` | `log_event()` with actor, diff, IP, request ID | Complete |
-| **Page 10** | Roster Versioning & Shift Scheduling | `backend/app/models/models.py` (`Roster`, `RosterAssignment`)<br>`backend/app/api/routes/roster.py` | Version increment on update; draft/submit/publish | Complete |
-| **Page 11** | Attendance Verification (Scheduled vs Confirmed separation) | `backend/app/models/models.py` (`Attendance`)<br>`backend/app/api/routes/operations.py` | Roll-call verification endpoints & bulk confirm | Complete |
-| **Page 12** | Outside Movements (Log out, expected return, overdue tracking) | `backend/app/models/models.py` (`Movement`)<br>`backend/app/services/scheduler.py` | APScheduler 60-second overdue detection job | Complete |
-| **Page 13** | Leave & Rest Management, Attachment Orders | `backend/app/models/models.py` (`LeaveRequest`, `AttachmentOrder`)<br>`backend/app/api/routes/operations.py`<br>`backend/app/api/routes/attachments.py` | Availability Engine excludes on approved leave | Complete |
-| **Page 14** | 14 Dashboard KPI Summary Cards & Shift-End Handover Report | `backend/app/api/routes/dashboard.py`<br>`backend/app/api/routes/reports.py` | 14-card metric calculation & CSV report export | Complete |
-| **Page 15** | Mobile / Sector SI Experience & Responsive Layout | `frontend/src/app/globals.css`<br>`frontend/src/components/AppShell.tsx` | Mobile-first CSS & responsive flex/grid shells | Complete |
-| **Page 16** | Unresolved Station Policy Gate (Section 1 Gate) | `backend/app/models/models.py` (`RotationRule`, `PolicyStatus`)<br>`backend/app/api/routes/policy.py` | `is_demo_policy` check blocking publish if unconfirmed | Complete |
-| **Page 17** | Role-Based Access Control (RBAC) & Scope Guarding | `backend/app/auth/dependencies.py` (`require_roles`, `get_current_user`) | Token verification & sector ID scoping | Complete |
-| **Page 18** | Security & Session Lockout Protection | `backend/app/models/models.py` (`User.failed_login_attempts`)<br>`backend/app/api/routes/auth.py` | 5 failed attempts locks user for 15 minutes | Complete |
-| **Page 19** | Testing Strategy & Scenario Matrix | `backend/tests/test_availability.py` | Pytest suite testing all core scenarios | Complete |
-| **Page 20** | Deployment & Operational Runbook | `docker-compose.yml`<br>`docs/security-and-deployment.md` | Single-command Docker startup & backup steps | Complete |
-| **Page 21** | Summary & Definition of Done | `README.md`<br>`docs/policy-confirmation.md` | Final delivery verification checklist | Complete |
+| Guide § | Requirement | Implementation | Evidence | Status |
+|:--|:--|:--|:--|:--|
+| 3.2, 12 | Permissions enforced in the API; sector scoping | `app/auth/dependencies.py`, every route | `test_roles.py` | Done |
+| 4.1 | Shifts A/B/C in an editable table | `ShiftConfig`, `app/services/shifts.py`, `PUT /policy/shifts/{code}` | `test_validation.py::test_shift_time_overlap_uses_configured_times` | Done |
+| 4.2 | Duty requirements editable | `DutyMaster`, `/duties` (create, edit), Configuration page | — | Done (untested) |
+| 4.3 | Status and state lists in tables | `config_list_items`, `/config/lists` | — | Done (untested) |
+| 5.3 #1 | Availability calculated, never typed | `app/services/availability.py` | `test_availability.py` | Done |
+| 5.3 #3 | Never delete a roster; versions with reason | `/rosters/{id}/revise`, `/versions`, superseded on publish | `test_scenarios.py::test_full_roster_lifecycle_with_versions` | Done |
+| 5.3 #4 | Traceable to user and authorizer | `audit_log` incl. authorizer, exception reason | `test_validation.py::test_save_refused_without_authorizer_and_audited_with_one` | Done |
+| 7 | Data model | `app/models/models.py`, `migrations/versions/0001_baseline.py` | Migration up/down in CI | Done (vehicle table not built — optional, Needs SHO) |
+| 8 | One status per person, priority order | `resolve_status`, `compute_statuses` | `test_availability.py` (128 combinations + DB cases) | Done — order Needs SHO |
+| 9.1 | Session: lockout, first-time password, logout, timeout, drafts | `routes/auth.py`, `dependencies.py`, web `auth-context.tsx`, Android | `test_auth_audit.py` | Done (OTP not built) |
+| 9.2 step 5 | Validation before saving; authorized exceptions | `app/services/validation.py`, `/rosters/validate` | `test_validation.py` | Done |
+| 9.4 | Movement lifecycle and overdue | `operations.py` movement routes, scheduler | `test_scenarios.py::test_late_return_from_movement` | Done |
+| 9.5 | Leave lifecycle incl. cancel and routing | `operations.py` leave routes, notifications | `test_scenarios.py::test_leave_routing_cancel_and_overlap` | Done |
+| 10 | Screens | `frontend/src/app/*` | `npm run build` in CI | Done (Android preview screen superseded by the real app) |
+| 10 | Dashboard filters and views | `/dashboard/summary`, `/dashboard/views` | `test_scenarios.py::test_dashboard_cards_are_exclusive` | Done |
+| 11 | AI features | `routes/ai.py` (keyword copilot, explain) | — | Not built beyond the prototype (out of scope for this phase) |
+| 12 | HTTPS, encrypted backups | `docker/nginx.conf`, `scripts/backup.sh`, `scripts/restore.sh` | Restore drill log | Done (department certificate and drill Needs IT) |
+| 14 | SHO decisions | [policy-confirmation.md](policy-confirmation.md) | — | Needs SHO |
 
----
+## Blueprint steps
 
-## 2. PowerPoint Slide-by-Slide Traceability (7 Slides)
-
-| Slide # | Slide Title & Key Visuals | Implementation Mapping | Notes |
-|:---|:---|:---|:---|
-| **Slide 1** | Title: Panjagutta Police Station Duty Management | Root Landing & Login Header | Official badge styling, prototype disclaimer |
-| **Slide 2** | Operational Pain Points: Manual registers, missed overdues | Dashboard Alerts & Overdue Movement monitoring | Automated highlight banners for overdue movements |
-| **Slide 3** | Station Organization & Hierarchy | `backend/app/db/seed.py` | Fabricated 5 Sectors, SHO, DI, SIs, PCs, WPCs, HCs |
-| **Slide 4** | Recommended Stack Architecture | FastAPI + Next.js App Router + PostgreSQL + APScheduler | All layers decoupled and strictly typed |
-| **Slide 5** | 13 Screens / Modules Walkthrough | `frontend/src/app/` (all 13 route directories) | Complete UI with functional forms, tables, modals |
-| **Slide 6** | AI Guardrails & Human-in-the-Loop | `backend/app/api/routes/ai.py`<br>`frontend/src/app/roster/page.tsx` | AI is draft-only; mandatory warning disclaimers |
-| **Slide 7** | Implementation Roadmap (Stages A to G) | `docs/requirements-traceability.md`<br>`docs/policy-confirmation.md` | Stages A through G covered with explicit gates |
+| Step | Done when | Evidence | Status |
+|:-:|:--|:--|:--|
+| 1 | Signed rules sheet exists | [policy-confirmation.md](policy-confirmation.md) | Needs SHO |
+| 2 | Role matrix agreed | [role-matrix-for-sho.md](role-matrix-for-sho.md) | Needs SHO |
+| 3 | One command start; CI runs tests | `docker compose up -d --build`; `.github/workflows/ci.yml` | Done |
+| 4 | Migrations create and roll back | CI job runs upgrade → downgrade → upgrade on PostgreSQL | Done |
+| 5 | Admin can view/edit every config value | Policy & Shifts, Configuration pages | Done |
+| 6 | Wrong password locks; logout kills token | `test_wrong_password_locks_account`, `test_logout_makes_token_unusable` | Done |
+| 7 | Sector SI cannot read another sector | `test_sector_si_cannot_read_other_sector` | Done |
+| 8 | Every write audited, append-only | `test_every_login_attempt_is_audited`, `test_audit_rows_cannot_be_modified_through_the_app` | Done (wipe tool exception noted) |
+| 9 | Add staff; find by sector/designation | Staff page, `GET /staff` filters | Done |
+| 10 | Each role sees only its menu | `AppShell.tsx` + server checks | Done |
+| 11 | Original roster viewable after change | `test_full_roster_lifecycle_with_versions` | Done |
+| 12 | 4 required, 3 assigned → 1 vacancy | `test_vacancy_reported_against_required_strength` | Done |
+| 13 | Each rule has a failing-without-it test | `test_validation.py` (one test per rule) | Done |
+| 14 | Override needs an authorizer | `test_override_requires_distinct_authorized_officer` | Done |
+| 15 | Draft invisible until published | `test_drafts_hidden_from_staff_and_di` | Done |
+| 16 | Scheduled and confirmed shown separately | `GET /attendance/scheduled`, Attendance → Scheduled vs Confirmed | Done (untested) |
+| 17 | Late task flagged | Scheduler `check_overdue_tasks` | Done (untested) |
+| 18 | Open movement → Outside; late highlighted | `test_late_return_from_movement` | Done |
+| 19 | Only approved leave removes eligibility | `test_pending_leave_does_not_count_but_approved_does` | Done |
+| 20 | Attached count in strength, not deployment | `test_attachment_and_attendance`, validation `ATTACHED` | Done |
+| 21 | Right officer alerted when overdue/stalled | `test_stalled_leave_raises_alert` | Done |
+| 22 | One status across every combination | `test_every_combination_yields_exactly_one_status_in_priority_order` | Done |
+| 23 | No one in two exclusive totals | `test_dashboard_cards_are_exclusive` | Done |
+| 24 | All dashboard filters work | `/dashboard/summary` filters | Done (untested) |
+| 25 | Reports with PDF and Excel | `test_report_exports_csv_xlsx_pdf_with_auth` | Done |
+| 26 | Mark attendance and request leave from a phone | Android app; `test_mobile.py`, `test_mobile_movement_request_and_password_change` | Done |
+| 27 | Unit, scenario, role tests pass in CI | `.github/workflows/ci.yml` | Done |
+| 28 | Security review, HTTPS, backups, restore drill | Tooling in place | Needs IT / department |
+| 29 | Pilot with one shift | [pilot-and-rollout-plan.md](pilot-and-rollout-plan.md) | Needs SHO |
+| 30 | Training and one-month review | [pilot-and-rollout-plan.md](pilot-and-rollout-plan.md), in-app Workflow Guide | Needs SHO |
+| 31–33 | AI stages | — | Out of scope for this phase |

@@ -22,14 +22,16 @@ logger = logging.getLogger(__name__)
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from sqlalchemy import delete, or_, select, text
+from sqlalchemy import and_, delete, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.auth.dependencies import get_current_user, require_roles
+from app.auth.dependencies import can_view_contact, get_current_user, require_roles
 from app.auth.jwt import hash_password
 from app.db.database import get_db
 from app.models.models import (
+    Attendance,
+    ShiftCode,
     Sector,
     Staff,
     StaffCategory,
@@ -87,6 +89,10 @@ class StaffOut(BaseModel):
     sector_id: Optional[int] = None
     section: Optional[str] = None
     contact_phone: Optional[str] = None
+    reporting_officer_id: Optional[int] = None
+    attached_to: Optional[str] = None
+    attachment_order: Optional[str] = None
+    attachment_until: Optional[date] = None
     is_active: bool
     is_demo: bool
     date_of_joining: Optional[date] = None
@@ -111,6 +117,7 @@ async def list_staff(
     section: Optional[str] = Query(None),
     is_active: Optional[bool] = Query(None),
     search: Optional[str] = Query(None),
+    attached: Optional[bool] = Query(None),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -142,9 +149,20 @@ async def list_staff(
     result = await db.execute(query)
     staff_items = result.scalars().all()
 
+    # Attachment details shown in the register (guide §10 Staff register)
+    from app.models.models import AttachmentOrder
+    att_rows = (await db.execute(select(AttachmentOrder).where(
+        AttachmentOrder.is_active == True,
+        AttachmentOrder.staff_id.in_([s.id for s in staff_items] or [-1]),
+    ))).scalars().all()
+    attachments = {a.staff_id: a for a in att_rows}
+    if attached is not None:
+        staff_items = [s for s in staff_items if (s.id in attachments) == attached]
+
     out = []
     for s in staff_items:
         u = s.user
+        att = attachments.get(s.id)
         out.append(
             StaffOut(
                 id=s.id,
@@ -154,11 +172,15 @@ async def list_staff(
                 category=s.category.value if hasattr(s.category, "value") else str(s.category),
                 sector_id=s.sector_id,
                 section=s.section,
-                contact_phone=s.contact_phone,
+                contact_phone=s.contact_phone if can_view_contact(current_user, s) else None,
+                reporting_officer_id=s.reporting_officer_id,
+                attached_to=att.attached_wing if att else None,
+                attachment_order=att.order_reference if att else None,
+                attachment_until=att.expected_end_date if att else None,
                 is_active=s.is_active,
                 is_demo=s.is_demo,
                 date_of_joining=s.date_of_joining,
-                notes=s.notes,
+                notes=s.notes if can_view_contact(current_user, s) else None,
                 user_id=u.id if u else None,
                 user_username=u.username if u else None,
                 user_role=u.role.value if (u and hasattr(u.role, "value")) else None,
@@ -192,7 +214,7 @@ async def create_staff(
             staff_id=staff.id,
             is_active=True,
             is_demo=False,
-            must_change_password=False,
+            must_change_password=True,  # issued by an administrator: the officer sets their own at first login
         )
         db.add(user_obj)
 
@@ -202,7 +224,7 @@ async def create_staff(
         action=AuditAction.STAFF_CREATED,
         entity_type="Staff",
         entity_id=staff.id,
-        new_values=payload.model_dump(),
+        new_values=payload.model_dump(mode="json", exclude={"password"}),
     )
     await db.commit()
     await db.refresh(staff)
@@ -247,7 +269,13 @@ async def update_staff(
     old_values = {
         "name": staff.name,
         "designation": staff.designation.value if hasattr(staff.designation, "value") else str(staff.designation),
+        "category": staff.category.value if hasattr(staff.category, "value") else str(staff.category),
+        "sector_id": staff.sector_id,
+        "section": staff.section,
+        "reporting_officer_id": staff.reporting_officer_id,
         "is_active": staff.is_active,
+        "user_role": staff.user.role.value if staff.user else None,
+        "user_username": staff.user.username if staff.user else None,
     }
 
     # Update staff fields
@@ -261,6 +289,8 @@ async def update_staff(
         staff.sector_id = payload.sector_id if payload.sector_id > 0 else None
     if payload.section is not None:
         staff.section = payload.section
+    if payload.reporting_officer_id is not None:
+        staff.reporting_officer_id = payload.reporting_officer_id if payload.reporting_officer_id > 0 else None
     if payload.contact_phone is not None:
         staff.contact_phone = payload.contact_phone
     if payload.date_of_joining is not None:
@@ -289,7 +319,7 @@ async def update_staff(
             staff_id=staff.id,
             is_active=staff.is_active,
             is_demo=False,
-            must_change_password=False,
+            must_change_password=True,
         )
         db.add(user_obj)
         await db.flush()
@@ -308,7 +338,7 @@ async def update_staff(
             user_obj.hashed_password = hash_password(payload.reset_password.strip())
             user_obj.failed_login_attempts = 0
             user_obj.locked_until = None
-            user_obj.must_change_password = False
+            user_obj.must_change_password = True  # admin reset: officer must choose a new password
         if payload.is_active is not None:
             user_obj.is_active = payload.is_active
         if payload.sector_id is not None:
@@ -321,7 +351,8 @@ async def update_staff(
         entity_type="Staff",
         entity_id=staff.id,
         old_values=old_values,
-        new_values=payload.model_dump(exclude_unset=True, exclude={"reset_password"}),
+        new_values={**payload.model_dump(mode="json", exclude_unset=True, exclude={"reset_password"}),
+                    "password_reset": bool(payload.reset_password)},
     )
     await db.commit()
     await db.refresh(staff)
@@ -410,7 +441,10 @@ async def clear_demo_data(
 
     # 4. Delete non-admin sessions and non-admin users
     await db.execute(delete(UserSession).where(UserSession.user_id != current_user.id))
-    await db.execute(delete(User).where(User.id != current_user.id))
+    # Delete all staff-linked users except system accounts
+    await db.execute(delete(User).where(and_(User.id != current_user.id, User.username.not_in(["admin_si_demo", "sho_panjagutta", "sho_demo"]))))
+    from app.db.init_users import ensure_demo_users
+    await ensure_demo_users(db)
 
     # 5. Delete all staff records
     await db.execute(delete(Staff))
@@ -1088,6 +1122,37 @@ async def import_staff_csv(
                     db.add(user_obj)
                     created_users_count += 1
 
+                # Record confirmed attendance for today for imported staff so dashboard and attendance stay synchronized
+                today_date = date.today()
+                now_utc = datetime.now(timezone.utc)
+                att_res = await db.execute(
+                    select(Attendance).where(
+                        Attendance.staff_id == staff_obj.id,
+                        Attendance.attendance_date == today_date,
+                        Attendance.shift_code == ShiftCode.A,
+                    )
+                )
+                existing_att = att_res.scalar_one_or_none()
+                if not existing_att:
+                    db.add(
+                        Attendance(
+                            staff_id=staff_obj.id,
+                            attendance_date=today_date,
+                            shift_code=ShiftCode.A,
+                            is_scheduled=True,
+                            is_confirmed=True,
+                            submitted_by_id=current_user.id,
+                            submitted_at=now_utc,
+                            verified_by_id=current_user.id,
+                            verified_at=now_utc,
+                        )
+                    )
+                else:
+                    existing_att.is_confirmed = True
+                    existing_att.is_scheduled = True
+                    existing_att.verified_by_id = current_user.id
+                    existing_att.verified_at = now_utc
+
         except Exception as e:
             errors.append(f"Row {row_idx} ({name} / {svc}): {str(e)}")
 
@@ -1163,11 +1228,12 @@ async def get_staff(
         category=staff.category.value if hasattr(staff.category, "value") else str(staff.category),
         sector_id=staff.sector_id,
         section=staff.section,
-        contact_phone=staff.contact_phone,
+        contact_phone=staff.contact_phone if can_view_contact(current_user, staff) else None,
+        reporting_officer_id=staff.reporting_officer_id,
         is_active=staff.is_active,
         is_demo=staff.is_demo,
         date_of_joining=staff.date_of_joining,
-        notes=staff.notes,
+        notes=staff.notes if can_view_contact(current_user, staff) else None,
         user_id=u.id if u else None,
         user_username=u.username if u else None,
         user_role=u.role.value if (u and hasattr(u.role, "value")) else None,

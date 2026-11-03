@@ -6,6 +6,8 @@ import {
   getPolicyStatus,
   confirmPolicy,
   enableDemoMode,
+  updateShiftConfig,
+  formatApiError,
   PolicyStatusData,
 } from "@/lib/api";
 
@@ -13,6 +15,7 @@ export default function PolicyPage() {
   const { token, user } = useAuth();
   const [policy, setPolicy] = useState<PolicyStatusData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [savingShift, setSavingShift] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
@@ -23,6 +26,14 @@ export default function PolicyPage() {
   const [policyNotes, setPolicyNotes] = useState(
     "Station House Officer formal approval of shift rotation rules and mandatory rest intervals."
   );
+  const [permittedExceptions, setPermittedExceptions] = useState("");
+  const [authorizerRole, setAuthorizerRole] = useState("SHO");
+  const [effectiveFrom, setEffectiveFrom] = useState("");
+
+  // Shift Timing Editing State
+  const [editingShiftCode, setEditingShiftCode] = useState<string | null>(null);
+  const [editStartTime, setEditStartTime] = useState("");
+  const [editEndTime, setEditEndTime] = useState("");
 
   const fetchPolicy = useCallback(async () => {
     if (!token) return;
@@ -33,8 +44,11 @@ export default function PolicyPage() {
       if (data.rotation_sequence) setRotationSeq(data.rotation_sequence);
       if (data.min_rest_hours_after_shift) setMinRestHours(data.min_rest_hours_after_shift);
       if (data.duty_off_after_shift_b_hours) setDutyOffHours(data.duty_off_after_shift_b_hours);
+      if (data.permitted_exceptions) setPermittedExceptions(data.permitted_exceptions);
+      if (data.exception_authorizer_role) setAuthorizerRole(data.exception_authorizer_role);
+      if (data.effective_from) setEffectiveFrom(data.effective_from);
     } catch (err: any) {
-      setError(err.message || "Failed to load policy data");
+      setError(formatApiError(err, "Failed to load policy data"));
     } finally {
       setLoading(false);
     }
@@ -48,33 +62,70 @@ export default function PolicyPage() {
     e.preventDefault();
     if (!token) return;
     setError(null);
+    setSuccess(null);
     try {
       await confirmPolicy(token, {
         rotation_sequence: rotationSeq,
         min_rest_hours_after_shift: minRestHours,
         duty_off_after_shift_b_hours: dutyOffHours,
+        permitted_exceptions: permittedExceptions || null,
+        exception_authorizer_role: authorizerRole || null,
+        effective_from: effectiveFrom || null,
         notes: policyNotes,
       });
       setSuccess("Station duty rotation policy formally confirmed by SHO. Policy Gate cleared.");
       fetchPolicy();
     } catch (err: any) {
-      setError(err.message || "Failed to confirm policy");
+      setError(formatApiError(err, "Failed to confirm policy"));
     }
   };
 
   const handleEnableDemo = async () => {
     if (!token) return;
     setError(null);
+    setSuccess(null);
     try {
       await enableDemoMode(token);
       setSuccess("Demo simulation mode activated. Prototype notice banner displayed.");
       fetchPolicy();
     } catch (err: any) {
-      setError(err.message || "Failed to activate demo mode");
+      setError(formatApiError(err, "Failed to activate demo mode"));
     }
   };
 
-  const isSho = user?.role === "SHO";
+  const handleStartEditShift = (shift: { shift_code: string; start_time: string; end_time: string }) => {
+    setEditingShiftCode(shift.shift_code);
+    setEditStartTime(shift.start_time.slice(0, 5));
+    setEditEndTime(shift.end_time.slice(0, 5));
+  };
+
+  const handleSaveShiftTiming = async (shiftCode: string) => {
+    if (!token) return;
+    setSavingShift(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      const [sh, sm] = editStartTime.split(":").map(Number);
+      const [eh, em] = editEndTime.split(":").map(Number);
+      const minutes = ((eh * 60 + em) - (sh * 60 + sm) + 24 * 60) % (24 * 60) || 24 * 60;
+      await updateShiftConfig(token, shiftCode, {
+        start_time: editStartTime,
+        end_time: editEndTime,
+        duration_hours: minutes / 60,
+      });
+      setSuccess(`Shift ${shiftCode} timings successfully updated to ${editStartTime} - ${editEndTime}.`);
+      setEditingShiftCode(null);
+      fetchPolicy();
+    } catch (err: any) {
+      setError(formatApiError(err, `Failed to update Shift ${shiftCode} timings`));
+    } finally {
+      setSavingShift(false);
+    }
+  };
+
+  const isSho = user?.role === "SHO" || user?.role === "SUPER_ADMIN";
+  const isAdminSi = user?.role === "ADMIN_SI" || user?.role === "SUPER_ADMIN";
+  const canEditShifts = isSho || isAdminSi;
 
   return (
     <AppShell>
@@ -115,7 +166,7 @@ export default function PolicyPage() {
         </div>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr", gap: "20px" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: "20px" }}>
         {/* Left: Policy Sign-Off Form */}
         <div className="card">
           <div className="card__header">
@@ -162,6 +213,26 @@ export default function PolicyPage() {
               </div>
             </div>
 
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "12px", marginBottom: "16px" }}>
+              <div className="form-group">
+                <label className="form-label" htmlFor="pol-auth">Who may authorize exceptions</label>
+                <select id="pol-auth" className="form-control" value={authorizerRole} onChange={(e) => setAuthorizerRole(e.target.value)} disabled={!isSho}>
+                  <option value="SHO">SHO only</option>
+                  <option value="ADMIN_SI">Admin SI</option>
+                </select>
+              </div>
+              <div className="form-group">
+                <label className="form-label" htmlFor="pol-eff">Effective from</label>
+                <input id="pol-eff" type="date" className="form-control" value={effectiveFrom} onChange={(e) => setEffectiveFrom(e.target.value)} disabled={!isSho} />
+              </div>
+            </div>
+
+            <div className="form-group" style={{ marginBottom: "16px" }}>
+              <label className="form-label" htmlFor="pol-exc">Permitted exceptions to rest rules</label>
+              <textarea id="pol-exc" className="form-control" rows={2} value={permittedExceptions} onChange={(e) => setPermittedExceptions(e.target.value)} disabled={!isSho}
+                placeholder="e.g. Emergency deployment, VIP bandobast, law and order situations" />
+            </div>
+
             <div className="form-group" style={{ marginBottom: "20px" }}>
               <label className="form-label">SHO Authorization Remarks</label>
               <textarea
@@ -173,7 +244,7 @@ export default function PolicyPage() {
               />
             </div>
 
-            <div style={{ display: "flex", gap: "12px" }}>
+            <div style={{ display: "flex", gap: "12px", flexWrap: "wrap" }}>
               {isSho ? (
                 <button type="submit" className="btn btn-primary" id="btn-confirm-policy">
                   ✓ Officially Confirm Policy (SHO)
@@ -210,24 +281,82 @@ export default function PolicyPage() {
                     <th>Hours</th>
                     <th>Duration</th>
                     <th>Crosses Midnight</th>
+                    {canEditShifts && <th>Action</th>}
                   </tr>
                 </thead>
                 <tbody>
-                  {policy?.shifts?.map((s) => (
-                    <tr key={s.shift_code}>
-                      <td><strong style={{ color: "#38bdf8" }}>Shift {s.shift_code}</strong></td>
-                      <td>{s.start_time} &ndash; {s.end_time}</td>
-                      <td>{s.duration_hours} hrs</td>
-                      <td>{s.crosses_midnight ? <span className="badge badge-warning">Yes</span> : "No"}</td>
-                    </tr>
-                  ))}
+                  {policy?.shifts?.map((s) => {
+                    const isEditing = editingShiftCode === s.shift_code;
+                    return (
+                      <tr key={s.shift_code}>
+                        <td><strong style={{ color: "#38bdf8" }}>Shift {s.shift_code}</strong></td>
+                        <td>
+                          {isEditing ? (
+                            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                              <input
+                                type="time"
+                                className="form-control"
+                                value={editStartTime}
+                                onChange={(e) => setEditStartTime(e.target.value)}
+                                style={{ width: "95px", padding: "2px 6px", fontSize: "12px" }}
+                              />
+                              <span>&ndash;</span>
+                              <input
+                                type="time"
+                                className="form-control"
+                                value={editEndTime}
+                                onChange={(e) => setEditEndTime(e.target.value)}
+                                style={{ width: "95px", padding: "2px 6px", fontSize: "12px" }}
+                              />
+                            </div>
+                          ) : (
+                            <span>{s.start_time.slice(0, 5)} &ndash; {s.end_time.slice(0, 5)}</span>
+                          )}
+                        </td>
+                        <td>{s.duration_hours} hrs</td>
+                        <td>{s.crosses_midnight ? <span className="badge badge-warning">Yes</span> : "No"}</td>
+                        {canEditShifts && (
+                          <td>
+                            {isEditing ? (
+                              <div style={{ display: "flex", gap: "4px" }}>
+                                <button
+                                  className="btn btn-primary btn-sm"
+                                  onClick={() => handleSaveShiftTiming(s.shift_code)}
+                                  disabled={savingShift}
+                                  style={{ padding: "2px 8px", fontSize: "11px" }}
+                                >
+                                  Save
+                                </button>
+                                <button
+                                  className="btn btn-secondary btn-sm"
+                                  onClick={() => setEditingShiftCode(null)}
+                                  disabled={savingShift}
+                                  style={{ padding: "2px 6px", fontSize: "11px" }}
+                                >
+                                  ✕
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                className="btn btn-secondary btn-sm"
+                                onClick={() => handleStartEditShift(s)}
+                                style={{ padding: "2px 8px", fontSize: "11px" }}
+                              >
+                                Edit
+                              </button>
+                            )}
+                          </td>
+                        )}
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
 
             <div style={{ padding: "16px", borderTop: "1px solid #1e293b", fontSize: "12px", color: "#94a3b8" }}>
               <strong>Station Architecture Note:</strong><br />
-              Shifts are 8-hour continuous deployments across 3 cycles per 24 hours. The shift definitions are stored centrally in the database to prevent hardcoded client-side assumptions.
+              Shift timings are stored centrally and used everywhere (dashboard, roster, attendance, rest and overlap checks, reports and the Android app). Every change is versioned and written to the audit log; it applies to rest and conflict checks from the next validation.
             </div>
           </div>
         </div>

@@ -22,8 +22,13 @@ export default function AttachmentsPage() {
   // Modal State
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [staffId, setStaffId] = useState("");
-  const [attachedWing, setAttachedWing] = useState("Cyber Crime Police Station, Hyderabad");
-  const [orderRef, setOrderRef] = useState("CP/HYD/ATTACH/2024/88");
+  const [attachedWing, setAttachedWing] = useState("");
+  const [orderRef, setOrderRef] = useState("");
+  const [reportingId, setReportingId] = useState("");
+  const [endTarget, setEndTarget] = useState<number | null>(null);
+  const [endAuthority, setEndAuthority] = useState("");
+  const [endDateActual, setEndDateActual] = useState("");
+  const canManage = ["SHO", "ADMIN_SI", "SUPER_ADMIN"].includes(user?.role || "");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
 
@@ -63,9 +68,13 @@ export default function AttachmentsPage() {
         order_reference: orderRef || null,
         start_date: startDate,
         expected_end_date: endDate || null,
+        reporting_officer_id: reportingId ? parseInt(reportingId, 10) : null,
       });
       setSuccess("Attachment order recorded. Personnel excluded from station duty rosters.");
       setShowCreateModal(false);
+      setAttachedWing("");
+      setOrderRef("");
+      setReportingId("");
       fetchData();
     } catch (err: any) {
       setError(err.message || "Failed to create attachment order");
@@ -74,11 +83,17 @@ export default function AttachmentsPage() {
 
   const handleEnd = async (attachmentId: number) => {
     if (!token) return;
+    if (!endAuthority.trim()) {
+      setError("Enter the repatriation order / authority.");
+      return;
+    }
     try {
       await endAttachment(token, attachmentId, {
-        actual_end_date: new Date().toISOString().split("T")[0],
-        end_authority: "Repatriation order issued by Commissioner of Police.",
+        actual_end_date: endDateActual || new Date().toISOString().split("T")[0],
+        end_authority: endAuthority.trim(),
       });
+      setEndTarget(null);
+      setEndAuthority("");
       setSuccess("Attachment ended. Officer returned to station active pool.");
       fetchData();
     } catch (err: any) {
@@ -98,13 +113,15 @@ export default function AttachmentsPage() {
             Personnel attached to Task Force, Cyber Crime, High Court, or Commissionerate. Excluded from daily rosters.
           </div>
         </div>
-        <button
-          className="btn btn-primary"
-          onClick={() => setShowCreateModal(true)}
-          id="btn-create-attachment"
-        >
-          + Record Attachment Order
-        </button>
+        {canManage && (
+          <button
+            className="btn btn-primary"
+            onClick={() => setShowCreateModal(true)}
+            id="btn-create-attachment"
+          >
+            + Record Attachment Order
+          </button>
+        )}
       </div>
 
       {error && <div className="alert-banner alert-banner--warning" style={{ marginBottom: "16px" }}>{error}</div>}
@@ -132,6 +149,7 @@ export default function AttachmentsPage() {
                     <th>Order Reference</th>
                     <th>Attached Since</th>
                     <th>Expected End</th>
+                    <th>Reporting Officer</th>
                     <th>Action</th>
                   </tr>
                 </thead>
@@ -150,14 +168,26 @@ export default function AttachmentsPage() {
                         <td style={{ fontWeight: 600, color: "#38bdf8" }}>{a.attached_wing}</td>
                         <td style={{ fontSize: "12px", color: "#94a3b8" }}>{a.order_reference || "N/A"}</td>
                         <td>{a.start_date}</td>
-                        <td style={{ fontSize: "12px", color: "#94a3b8" }}>{a.expected_end_date || "Indefinite"}</td>
+                        <td style={{ fontSize: "12px", color: a.is_past_expected_end ? "#dc2626" : "#94a3b8" }}>
+                          {a.expected_end_date || "Indefinite"}
+                          {a.is_past_expected_end && <div><span className="badge badge-danger">Past end date</span></div>}
+                        </td>
+                        <td style={{ fontSize: "12px" }}>{a.reporting_officer_name || "—"}</td>
                         <td>
-                          <button
-                            className="btn btn-secondary btn-sm"
-                            onClick={() => handleEnd(a.id)}
-                          >
-                            Repatriate to Station
-                          </button>
+                          {canManage && (endTarget === a.id ? (
+                            <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 220 }}>
+                              <input className="form-control" placeholder="Repatriation order / authority *" value={endAuthority} onChange={(e) => setEndAuthority(e.target.value)} aria-label="Repatriation authority" />
+                              <input type="date" className="form-control" value={endDateActual} onChange={(e) => setEndDateActual(e.target.value)} aria-label="Actual end date" />
+                              <div style={{ display: "flex", gap: 6 }}>
+                                <button className="btn btn-primary btn-sm" onClick={() => handleEnd(a.id)}>Confirm</button>
+                                <button className="btn btn-secondary btn-sm" onClick={() => setEndTarget(null)}>Cancel</button>
+                              </div>
+                            </div>
+                          ) : (
+                            <button className="btn btn-secondary btn-sm" onClick={() => { setEndTarget(a.id); setEndAuthority(""); setEndDateActual(""); }}>
+                              Repatriate to Station
+                            </button>
+                          ))}
                         </td>
                       </tr>
                     );
@@ -186,6 +216,7 @@ export default function AttachmentsPage() {
                     <th>Officer</th>
                     <th>Attached Wing</th>
                     <th>Period</th>
+                    <th>Order / Authority</th>
                     <th>Status</th>
                   </tr>
                 </thead>
@@ -196,6 +227,7 @@ export default function AttachmentsPage() {
                       <td>{a.staff_name || `Staff #${a.staff_id}`}</td>
                       <td>{a.attached_wing}</td>
                       <td>{a.start_date} to {a.actual_end_date || "—"}</td>
+                      <td style={{ fontSize: 12 }}>{a.order_reference || "—"}<div className="text-muted">{a.end_authority || ""}</div></td>
                       <td><span className="badge badge-success">Repatriated</span></td>
                     </tr>
                   ))}
@@ -215,14 +247,14 @@ export default function AttachmentsPage() {
             left: 0,
             right: 0,
             bottom: 0,
-            backgroundColor: "rgba(0,0,0,0.7)",
+            backgroundColor: "rgba(0,0,0,0.7)", padding: "12px",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
             zIndex: 1000,
           }}
         >
-          <div className="card" style={{ width: "480px", maxWidth: "90vw" }}>
+          <div className="card" style={{ width: "100%", maxWidth: "min(95vw, 650px)" }}>
             <div className="card__header">
               <span className="card__title">Create Attachment Order</span>
               <button
@@ -273,7 +305,17 @@ export default function AttachmentsPage() {
                 />
               </div>
 
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", marginBottom: "20px" }}>
+              <div className="form-group" style={{ marginBottom: "16px" }}>
+                <label className="form-label" htmlFor="att-reporting">Reporting officer in the attached wing (if a station officer)</label>
+                <select id="att-reporting" className="form-control" value={reportingId} onChange={(e) => setReportingId(e.target.value)}>
+                  <option value="">-- Not applicable / external officer --</option>
+                  {staffList.filter((s) => ["INSPECTOR", "SI", "WSI", "ASI", "AWSI"].includes(s.designation)).map((s) => (
+                    <option key={s.id} value={s.id}>{s.name} ({s.designation})</option>
+                  ))}
+                </select>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "12px", marginBottom: "20px" }}>
                 <div className="form-group">
                   <label className="form-label">Start Date</label>
                   <input

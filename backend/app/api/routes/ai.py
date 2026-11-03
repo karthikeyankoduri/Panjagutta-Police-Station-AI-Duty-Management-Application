@@ -16,7 +16,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_
 
-from app.auth.dependencies import get_current_user
+from app.auth.dependencies import OFFICERS, get_current_user, require_roles
 from app.db.database import get_db
 from app.models.models import (
     Staff, ShiftCode, Roster, RosterAssignment, DutyMaster,
@@ -44,7 +44,7 @@ class NaturalLanguageQuery(BaseModel):
 @router.post("/explain-roster")
 async def explain_roster_allocation(
     payload: ExplainRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_roles(*OFFICERS)),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -110,7 +110,7 @@ async def explain_roster_allocation(
 @router.post("/query")
 async def process_natural_language_query(
     payload: NaturalLanguageQuery,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_roles(*OFFICERS)),
     db: AsyncSession = Depends(get_db),
 ):
     """

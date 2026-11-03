@@ -25,6 +25,10 @@ SessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=
 
 
 async def seed(reset: bool = False):
+    if settings.APP_ENV.lower() == "production" or not settings.SEED_DEMO_DATA:
+        # Never wipe the audit log or create demo accounts on an operational system.
+        print("[REFUSED] Demo seeding is disabled (APP_ENV=production or SEED_DEMO_DATA=false).")
+        return
     from app.db.database import engine, Base
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -36,8 +40,9 @@ async def seed(reset: bool = False):
             for table in [
                 "audit_log", "alerts", "attachment_orders", "movements",
                 "leave_requests", "tasks", "attendance", "roster_assignments",
-                "rosters", "user_sessions", "users", "staff",
+                "rosters", "user_sessions", "notifications", "users", "staff",
                 "duty_master", "shift_config", "rotation_rules", "sectors",
+                "sections", "config_list_items",
             ]:
                 try:
                     await db.execute(text(f'TRUNCATE TABLE "{table}" RESTART IDENTITY CASCADE'))
@@ -45,69 +50,14 @@ async def seed(reset: bool = False):
                     await db.execute(text(f'DELETE FROM "{table}"'))
             await db.commit()
 
-        # ── Sectors ──────────────────────────────────────────────────────────
-        sectors = []
-        for i in range(1, 6):
-            s = Sector(name=f"Sector {i}", code=f"SEC{i}", description=f"Panjagutta PS Sector {i}")
-            db.add(s)
-            sectors.append(s)
-        await db.flush()
-
-        # ── Shift Configuration (PDF page 4) ─────────────────────────────────
-        shifts = [
-            ShiftConfig(shift_code=ShiftCode.A, start_time=time(8, 0), end_time=time(14, 0), duration_hours=6.0),
-            ShiftConfig(shift_code=ShiftCode.B, start_time=time(14, 0), end_time=time(20, 0), duration_hours=6.0),
-            ShiftConfig(shift_code=ShiftCode.C, start_time=time(20, 0), end_time=time(8, 0), duration_hours=12.0, crosses_midnight=True),
-        ]
-        for s in shifts:
-            db.add(s)
-
-        # ── Duty Master (PDF pages 4-5) ───────────────────────────────────────
-        duties = [
-            DutyMaster(category="Summons", section="Court", required_strength=2,
-                       eligible_designations=["PC", "WPC"], is_configured=True),
-            DutyMaster(category="Warrants", section="Court", required_strength=2,
-                       eligible_designations=["PC", "WPC"], is_configured=True),
-            DutyMaster(category="Sessions Court", section="Court", required_strength=2,
-                       eligible_designations=["ASI", "AWSI", "HC", "WHC"], is_configured=True),
-            DutyMaster(category="JFCM Staff", section="Court", required_strength=2,
-                       eligible_designations=["PC", "WPC"], is_configured=True),
-            DutyMaster(category="Reception", required_strength=2, is_configured=True),
-            DutyMaster(category="eCOPS", required_strength=2, is_configured=True),
-            DutyMaster(category="CCTNS", required_strength=1, is_configured=True),
-            DutyMaster(category="Section In-charges", required_strength=3, is_configured=True),
-            DutyMaster(category="Patrol Vehicles", shift_code=ShiftCode.A, required_strength=3, is_configured=True),
-            DutyMaster(category="Patrol Vehicles", shift_code=ShiftCode.B, required_strength=3, is_configured=True),
-            DutyMaster(category="Patrol Vehicles", shift_code=ShiftCode.C, required_strength=3, is_configured=True),
-            DutyMaster(category="Beat Constables", shift_code=ShiftCode.A, required_strength=4,
-                       eligible_designations=["PC", "WPC", "ARPC", "ARWPC"], is_configured=True),
-            DutyMaster(category="Beat Constables", shift_code=ShiftCode.B, required_strength=4,
-                       eligible_designations=["PC", "WPC", "ARPC", "ARWPC"], is_configured=True),
-            DutyMaster(category="Beat Constables", shift_code=ShiftCode.C, required_strength=4,
-                       eligible_designations=["PC", "WPC", "ARPC", "ARWPC"], is_configured=True),
-            # Not-configured categories
-            DutyMaster(category="SHO Driver", section="Drivers", is_configured=False),
-            DutyMaster(category="DI Driver", section="Drivers", is_configured=False),
-            DutyMaster(category="Pilot Driver", section="Drivers", is_configured=False),
-            DutyMaster(category="Station Writer", is_configured=False),
-        ]
-        for d in duties:
-            db.add(d)
-
-        # ── Rotation Rule — UNCONFIRMED ───────────────────────────────────────
-        rotation = RotationRule(
-            version=1,
-            rotation_sequence=None,  # Unconfirmed — do not invent
-            min_rest_hours_after_shift=None,
-            policy_status=PolicyStatus.UNCONFIRMED,
-            notes=(
-                "⚠ POLICY UNCONFIRMED — Rotation sequence and mandatory rest hours must be confirmed by the SHO. "
-                "Roster publishing is blocked until demo-simulated or formally confirmed. "
-                "See docs/policy-confirmation.md for full list of open decisions."
-            ),
-        )
-        db.add(rotation)
-        await db.flush()
+        # ── Configuration (sectors, shifts, duties, rotation rule, lists) ──
+        from app.db.bootstrap import ensure_config
+        from sqlalchemy import select as _select
+        await ensure_config(db)
+        sectors = list((await db.execute(_select(Sector).order_by(Sector.id))).scalars().all())
+        if (await db.execute(_select(Staff).where(Staff.service_number == "SHO001"))).scalars().first():
+            print("[SKIP] Demo staff already present. Use --reset to recreate.")
+            return
 
         # ── Demo Staff — FABRICATED ───────────────────────────────────────────
         demo_staff_data = [

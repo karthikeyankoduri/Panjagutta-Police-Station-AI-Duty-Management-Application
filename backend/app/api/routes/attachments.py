@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from app.auth.dependencies import get_current_user, require_roles
+from app.auth.dependencies import OFFICERS, get_current_user, require_roles, sector_scope
 from app.db.database import get_db
 from app.models.models import AttachmentOrder, Staff, User, UserRoleEnum
 from app.services.audit import log_event, AuditAction
@@ -77,10 +77,13 @@ async def create_attachment(
 async def list_attachments(
     active_only: bool = Query(True),
     staff_id: Optional[int] = Query(None),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_roles(*OFFICERS)),
     db: AsyncSession = Depends(get_db),
 ):
     query = select(AttachmentOrder)
+    scope = sector_scope(current_user)
+    if scope is not None:
+        query = query.join(Staff, AttachmentOrder.staff_id == Staff.id).where(Staff.sector_id == scope)
     if active_only:
         query = query.where(AttachmentOrder.is_active == True)
     if staff_id:
@@ -89,8 +92,8 @@ async def list_attachments(
     result = await db.execute(query.order_by(AttachmentOrder.start_date.desc()))
     records = result.scalars().all()
 
-    # Preload staff details
-    staff_ids = list({r.staff_id for r in records})
+    # Preload staff details (attached person and reporting officer)
+    staff_ids = list({r.staff_id for r in records} | {r.reporting_officer_id for r in records if r.reporting_officer_id})
     staff_map = {}
     if staff_ids:
         s_res = await db.execute(select(Staff).where(Staff.id.in_(staff_ids)))
@@ -109,6 +112,10 @@ async def list_attachments(
             "expected_end_date": r.expected_end_date.isoformat() if r.expected_end_date else None,
             "actual_end_date": r.actual_end_date.isoformat() if r.actual_end_date else None,
             "is_active": r.is_active,
+            "reporting_officer_id": r.reporting_officer_id,
+            "reporting_officer_name": staff_map.get(r.reporting_officer_id).name if staff_map.get(r.reporting_officer_id) else None,
+            "end_authority": r.end_authority,
+            "is_past_expected_end": bool(r.is_active and r.expected_end_date and r.expected_end_date < date_type.today()),
         }
         for r in records
     ]
@@ -126,6 +133,9 @@ async def end_attachment(
     if not order:
         raise HTTPException(status_code=404, detail="Attachment order not found")
 
+    if not order.is_active:
+        raise HTTPException(status_code=400, detail="Attachment order already ended")
+    old_values = {"is_active": True, "actual_end_date": None}
     order.is_active = False
     order.actual_end_date = payload.actual_end_date
     order.end_authority = payload.end_authority
@@ -137,6 +147,7 @@ async def end_attachment(
         action="ATTACHMENT_ENDED",
         entity_type="AttachmentOrder",
         entity_id=attachment_id,
+        old_values=old_values,
         new_values=payload.model_dump(mode="json"),
     )
     await db.commit()

@@ -4,12 +4,12 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 
 export default function HomePage() {
-  const { token, isLoading } = useAuth();
+  const { token, user, isLoading } = useAuth();
   const router = useRouter();
 
   useEffect(() => {
     if (!isLoading) {
-      router.replace(token ? "/dashboard" : "/login");
+      router.replace(!token ? "/login" : user?.role === "STAFF" ? "/roster" : "/dashboard");
     }
   }, [token, isLoading, router]);
 
