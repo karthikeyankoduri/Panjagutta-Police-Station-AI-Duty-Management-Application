@@ -8,6 +8,8 @@ import {
   getNotifications,
   markAllNotificationsRead,
   markNotificationRead,
+  getMyProfile,
+  MyProfile,
   NotificationItem,
 } from "@/lib/api";
 
@@ -26,8 +28,7 @@ const ADMINS = ["SHO", "ADMIN_SI", "SUPER_ADMIN"];
 const NAV_ITEMS: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: "📊", roles: OFFICERS },
   { href: "/staff", label: "Staff & CSV Import", icon: "👥", roles: ADMINS },
-  { href: "/roster", label: "Shift Roster", icon: "📅" },
-  { href: "/duty-allocation", label: "Duty Allocation", icon: "📋", roles: ["SHO", "ADMIN_SI", "SECTOR_SI", "SUPER_ADMIN"] },
+  { href: "/roster", label: "Roster & Duty", icon: "📋" },
   { href: "/attendance", label: "Attendance", icon: "✅" },
   { href: "/tasks", label: "Tasks", icon: "📌" },
   { href: "/movements", label: "Outside Movements", icon: "🚗" },
@@ -55,6 +56,17 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const [bellOpen, setBellOpen] = useState(false);
   const [approvalCount, setApprovalCount] = useState(0);
   const bellRef = useRef<HTMLDivElement>(null);
+  const profileRef = useRef<HTMLDivElement>(null);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [profile, setProfile] = useState<MyProfile | null>(null);
+  const [profileError, setProfileError] = useState("");
+
+  // Always load the current record when the panel opens, so it never shows stale details.
+  useEffect(() => {
+    if (!profileOpen || !token) return;
+    setProfileError("");
+    getMyProfile(token).then(setProfile).catch(() => setProfileError("Could not load your profile. Try again."));
+  }, [profileOpen, token]);
 
   // Every page behind the shell requires a signed-in user who has set their own password.
   useEffect(() => {
@@ -70,6 +82,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       if (e.key === "Escape") {
         setMobileMenuOpen(false);
         setBellOpen(false);
+        setProfileOpen(false);
       }
     };
     window.addEventListener("keydown", handleKeyDown);
@@ -86,6 +99,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const close = (e: MouseEvent) => {
       if (bellRef.current && !bellRef.current.contains(e.target as Node)) setBellOpen(false);
+      if (profileRef.current && !profileRef.current.contains(e.target as Node)) setProfileOpen(false);
     };
     document.addEventListener("mousedown", close);
     return () => document.removeEventListener("mousedown", close);
@@ -158,7 +172,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     refreshBadges();
     const target: Record<string, string> = {
       LeaveRequest: "/leave", Movement: "/movements", Roster: "/roster", Task: "/tasks",
-      RosterAssignment: "/duty-allocation", AttachmentOrder: "/attachments",
+      RosterAssignment: "/roster?tab=allocation", AttachmentOrder: "/attachments", DutyChangeRequest: "/roster?tab=requests",
     };
     if (n.entity_type && target[n.entity_type]) router.push(target[n.entity_type]);
   };
@@ -208,7 +222,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               )}
             </button>
             {bellOpen && (
-              <div role="dialog" aria-label="Notifications" className="card" style={{ position: "absolute", right: 0, top: "calc(100% + 8px)", width: 340, maxWidth: "90vw", zIndex: 200, maxHeight: 420, overflowY: "auto" }}>
+              <div role="dialog" aria-label="Notifications" className="card" style={{ color: "var(--color-text, #0f172a)", position: "absolute", right: 0, top: "calc(100% + 8px)", width: 340, maxWidth: "90vw", zIndex: 200, maxHeight: 420, overflowY: "auto" }}>
                 <div className="card__header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <strong>Notifications</strong>
                   {unread > 0 && (
@@ -236,10 +250,71 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               </div>
             )}
           </div>
-          <div className="app-header__user-info">
-            <strong className="user-name">{user.staff_name || user.username}</strong>
-            <span className="user-role-separator">&nbsp;&middot;&nbsp;</span>
-            <span className="user-role">{ROLE_LABELS[user.role] || user.role}</span>
+          <div ref={profileRef} style={{ position: "relative" }}>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => { setProfileOpen(!profileOpen); setBellOpen(false); }}
+              aria-label="My profile"
+              aria-expanded={profileOpen}
+              aria-haspopup="dialog"
+              id="btn-profile"
+              style={{ display: "flex", alignItems: "center", gap: 8 }}
+            >
+              <span aria-hidden="true" style={{ width: 24, height: 24, borderRadius: "50%", background: "var(--color-navy-900, #0f2238)", color: "#fff", display: "inline-flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 12 }}>
+                {(user.staff_name || user.username).charAt(0).toUpperCase()}
+              </span>
+              <span className="app-header__user-info" style={{ display: "inline" }}>
+                <strong className="user-name">{user.staff_name || user.username}</strong>
+                <span className="user-role-separator">&nbsp;&middot;&nbsp;</span>
+                <span className="user-role">{ROLE_LABELS[user.role] || user.role}</span>
+              </span>
+            </button>
+            {profileOpen && (
+              <div role="dialog" aria-label="My profile" className="card" style={{ color: "var(--color-text, #0f172a)", position: "absolute", right: 0, top: "calc(100% + 8px)", width: 340, maxWidth: "90vw", zIndex: 200, maxHeight: "75vh", overflowY: "auto" }}>
+                <div className="card__header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <strong>My profile</strong>
+                  <button className="btn btn-secondary btn-sm" onClick={() => setProfileOpen(false)} aria-label="Close profile">✕</button>
+                </div>
+                <div className="card__body" style={{ fontSize: 13 }}>
+                  <div style={{ marginBottom: 12 }}>
+                    <div style={{ fontWeight: 700, fontSize: 16 }}>{profile?.staff_name || user.staff_name || user.username}</div>
+                    <span className="badge badge-blue">{ROLE_LABELS[profile?.role || user.role] || user.role}</span>
+                    {(profile?.is_demo ?? user.is_demo) && <span className="badge-demo" style={{ marginLeft: 6 }}>Demo</span>}
+                  </div>
+                  {profileError && <div role="alert" className="alert-banner alert-banner--warning" style={{ marginBottom: 8 }}>{profileError}</div>}
+                  {!profile && !profileError && <div className="text-muted">Loading…</div>}
+                  {profile && (
+                    <dl style={{ margin: 0, display: "grid", gridTemplateColumns: "auto 1fr", gap: "6px 12px" }}>
+                      {([
+                        ["Username", profile.username],
+                        ["Service number", profile.service_number],
+                        ["Designation", profile.designation],
+                        ["Category", profile.category ? profile.category.replace(/_/g, " ") : null],
+                        ["Sector", profile.sector_name],
+                        ["Section", profile.section],
+                        ["Phone", profile.contact_phone],
+                        ["Reporting officer", profile.reporting_officer],
+                        ["Joined", profile.date_of_joining ? new Date(profile.date_of_joining).toLocaleDateString() : null],
+                        ["Email", profile.email],
+                        ["Last sign-in", profile.last_login ? new Date(profile.last_login).toLocaleString() : null],
+                        ["Account", profile.is_active ? "Active" : "Inactive"],
+                        ["Session timeout", profile.session_timeout_minutes ? `${profile.session_timeout_minutes} min of inactivity` : null],
+                      ] as [string, string | null | undefined][]).filter(([, v]) => v).map(([k, v]) => (
+                        <div key={k} style={{ display: "contents" }}>
+                          <dt className="text-muted">{k}</dt>
+                          <dd style={{ margin: 0, fontWeight: 600, wordBreak: "break-word" }}>{v}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                  )}
+                </div>
+                <div className="card__footer" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <Link href="/change-password" className="btn btn-secondary btn-sm" onClick={() => setProfileOpen(false)}>Change password</Link>
+                  <button className="btn btn-danger btn-sm" onClick={handleLogout}>Sign out</button>
+                </div>
+              </div>
+            )}
           </div>
           <button className="btn btn-secondary btn-sm app-header__signout-btn" onClick={handleLogout} id="btn-logout" title="Sign out of system">
             <span className="signout-text">Sign Out</span>

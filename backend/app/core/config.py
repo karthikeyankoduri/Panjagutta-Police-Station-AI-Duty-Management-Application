@@ -26,6 +26,11 @@ class Settings(BaseSettings):
     AUTH_LOCKOUT_MINUTES: int = 15
     AUTH_INACTIVITY_TIMEOUT_MINUTES: int = 60
 
+    # Attendance is recorded from sign-in. A sign-in this many minutes before a shift starts
+    # counts for that shift; after start + grace it is flagged late.
+    ATTENDANCE_EARLY_SIGNIN_MINUTES: int = 60
+    ATTENDANCE_LATE_GRACE_MINUTES: int = 15
+
     # Demo / seed
     SEED_DEMO_DATA: bool = True
     DEMO_POLICY_ENABLED: bool = True

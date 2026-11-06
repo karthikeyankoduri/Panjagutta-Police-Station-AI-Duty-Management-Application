@@ -314,7 +314,7 @@ async def approvals_inbox(
             return q
         return q.join(Staff, col == Staff.id).where(Staff.sector_id == scope)
 
-    items: Dict[str, list] = {"rosters": [], "leave": [], "movements": [], "attendance": []}
+    items: Dict[str, list] = {"rosters": [], "leave": [], "movements": []}
     if has_role(current_user, (UserRoleEnum.SHO,)):
         for r in (await db.execute(select(Roster).where(Roster.status == RosterStatus.SUBMITTED)
                                    .order_by(Roster.roster_date))).scalars().all():
@@ -334,17 +334,11 @@ async def approvals_inbox(
             items["movements"].append({"id": m.id, "staff_id": m.staff_id, "destination": m.destination,
                                        "purpose": m.purpose,
                                        "expected_return": m.expected_return.isoformat() if m.expected_return else None})
-        q = in_scope(select(Attendance).where(Attendance.is_confirmed == False, Attendance.submitted_at != None,
-                                              Attendance.attendance_date >= now_local().date().replace(day=1)),
-                     Attendance.staff_id)
-        for a in (await db.execute(q.order_by(Attendance.attendance_date.desc()).limit(100))).scalars().all():
-            items["attendance"].append({"id": a.id, "staff_id": a.staff_id, "date": str(a.attendance_date),
-                                        "shift_code": a.shift_code.value})
     alerts = await get_active_alerts(False, current_user, db)
-    staff_ids = {i["staff_id"] for k in ("leave", "movements", "attendance") for i in items[k]}
+    staff_ids = {i["staff_id"] for k in ("leave", "movements") for i in items[k]}
     if staff_ids:
         names = {s.id: s for s in (await db.execute(select(Staff).where(Staff.id.in_(staff_ids)))).scalars().all()}
-        for k in ("leave", "movements", "attendance"):
+        for k in ("leave", "movements"):
             for i in items[k]:
                 s = names.get(i["staff_id"])
                 i["staff_name"] = s.name if s else None

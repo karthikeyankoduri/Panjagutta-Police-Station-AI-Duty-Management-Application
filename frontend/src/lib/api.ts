@@ -179,6 +179,10 @@ export interface Movement {
 export interface Task {
   id: number;
   description: string;
+  category?: string;
+  category_label?: string;
+  custom_title?: string | null;
+  group_title?: string;
   assignee_id: number;
   assignee_name?: string;
   assignee_service_number?: string;
@@ -340,11 +344,10 @@ export interface NotificationItem {
 }
 
 export interface InboxData {
-  counts: { rosters: number; leave: number; movements: number; attendance: number; alerts: number; total: number };
+  counts: { rosters: number; leave: number; movements: number; alerts: number; total: number };
   rosters: Array<{ id: number; date: string; shift_code: string; version: number; change_reason: string | null; waiting_since: string | null }>;
   leave: Array<{ id: number; staff_id: number; staff_name?: string; service_number?: string; leave_type: string; start_date: string; end_date: string; reference_number: string | null; submitted_at: string | null }>;
   movements: Array<{ id: number; staff_id: number; staff_name?: string; service_number?: string; destination: string; purpose: string; expected_return: string | null }>;
-  attendance: Array<{ id: number; staff_id: number; staff_name?: string; service_number?: string; date: string; shift_code: string }>;
   alerts: Alert[];
 }
 
@@ -646,6 +649,43 @@ export async function addListItem(token: string, listName: string, data: { code:
   return json(await authFetch(token, `/config/lists/${listName}`, { method: "POST", body: JSON.stringify(data) }), "Failed to add list item");
 }
 
+/** Show or hide dashboard KPI cards in one save (SHO, Admin SI, Super Admin). */
+export async function setDashboardCards(token: string, cards: Record<string, boolean>) {
+  return json(await authFetch(token, "/config/dashboard-cards", { method: "PUT", body: JSON.stringify({ cards }) }), "Failed to save dashboard cards");
+}
+
+export interface MyProfile {
+  id: number;
+  username: string;
+  role: string;
+  email?: string | null;
+  is_active: boolean;
+  is_demo: boolean;
+  sector_id: number | null;
+  sector_name: string | null;
+  staff_id: number | null;
+  staff_name: string | null;
+  service_number: string | null;
+  designation?: string;
+  category?: string;
+  section?: string | null;
+  contact_phone?: string | null;
+  reporting_officer?: string | null;
+  date_of_joining?: string | null;
+  last_login: string | null;
+  member_since: string | null;
+  session_timeout_minutes?: number;
+}
+
+export async function getMyProfile(token: string): Promise<MyProfile> {
+  return json(await authFetch(token, "/auth/me"), "Failed to load profile");
+}
+
+/** Card keys the admin has switched off; an empty or missing list means every card is shown. */
+export function hiddenDashboardCards(lists: Record<string, ListItem[]>): Set<string> {
+  return new Set((lists.dashboard_card || []).filter((c) => !c.is_active).map((c) => c.code));
+}
+
 export async function getAuthorizers(token: string): Promise<Array<{ user_id: number; username: string; role: string; name: string; is_self: boolean }>> {
   const res = await authFetch(token, "/config/authorizers");
   if (!res.ok) return [];
@@ -718,6 +758,63 @@ export async function getActiveDraft(token: string, rosterDate: string, shiftCod
 
 export async function updateRosterAssignments(token: string, rosterId: number, data: { change_reason?: string; assignments: any[] }) {
   return json(await authFetch(token, `/rosters/${rosterId}/assignments`, { method: "PUT", body: JSON.stringify(data) }), "Failed to save duty assignments");
+}
+
+// ─── Duty Change Requests ──────────────────────────────────────────────────
+
+export interface DutyChangeRequest {
+  id: number;
+  roster_id: number;
+  roster_assignment_id?: number | null;
+  staff_id: number;
+  officer_name: string;
+  service_number: string;
+  current_shift_code: string;
+  current_duty_category?: string | null;
+  current_roster_date: string;
+  requested_shift_code?: string | null;
+  requested_duty_category?: string | null;
+  reason: string;
+  status: "pending" | "approved" | "rejected" | "withdrawn";
+  reviewed_by?: string | null;
+  reviewed_at?: string | null;
+  reviewer_remarks?: string | null;
+  submitted_at: string;
+}
+
+export async function getDutyChangeRequests(token: string, params?: { status?: string }): Promise<DutyChangeRequest[]> {
+  const qs = params?.status ? `?status=${params.status}` : "";
+  const res = await authFetch(token, `/rosters/change-requests/${qs}`);
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function submitDutyChangeRequest(
+  token: string,
+  data: {
+    roster_id: number;
+    roster_assignment_id?: number | null;
+    current_shift_code: string;
+    current_duty_category?: string | null;
+    current_roster_date: string;
+    requested_shift_code?: string | null;
+    requested_duty_category?: string | null;
+    reason: string;
+  }
+): Promise<DutyChangeRequest> {
+  return json(await authFetch(token, "/rosters/change-requests/", { method: "POST", body: JSON.stringify(data) }), "Failed to submit duty change request");
+}
+
+export async function approveDutyChangeRequest(token: string, id: number, remarks?: string): Promise<DutyChangeRequest> {
+  return json(await authFetch(token, `/rosters/change-requests/${id}/approve`, { method: "POST", body: JSON.stringify({ remarks }) }), "Failed to approve request");
+}
+
+export async function rejectDutyChangeRequest(token: string, id: number, remarks: string): Promise<DutyChangeRequest> {
+  return json(await authFetch(token, `/rosters/change-requests/${id}/reject`, { method: "POST", body: JSON.stringify({ remarks }) }), "Failed to reject request");
+}
+
+export async function withdrawDutyChangeRequest(token: string, id: number): Promise<void> {
+  await authFetch(token, `/rosters/change-requests/${id}`, { method: "DELETE" });
 }
 
 // ─── Duty Master ────────────────────────────────────────────────────────────
@@ -804,11 +901,12 @@ export async function returnMovement(token: string, movementId: number, notes?: 
 
 // ─── Tasks ──────────────────────────────────────────────────────────────────
 
-export async function getTasks(token: string, params?: { assignee_id?: number; task_status?: string; overdue_only?: boolean }): Promise<Task[]> {
+export async function getTasks(token: string, params?: { assignee_id?: number; task_status?: string; overdue_only?: boolean; category?: string }): Promise<Task[]> {
   const qs = new URLSearchParams();
   if (params?.assignee_id) qs.set("assignee_id", String(params.assignee_id));
   if (params?.task_status) qs.set("task_status", params.task_status);
   if (params?.overdue_only) qs.set("overdue_only", "true");
+  if (params?.category) qs.set("category", params.category);
   const res = await authFetch(token, `/tasks/?${qs}`);
   if (!res.ok) return [];
   return res.json();
@@ -850,24 +948,12 @@ export async function getAttendance(
   return res.json();
 }
 
+export async function getCurrentShift(token: string): Promise<{ shift_code: string; date: string }> {
+  return json(await authFetch(token, "/attendance/current-shift"), "Failed to load the current shift");
+}
+
 export async function getScheduledVsConfirmed(token: string, date: string, shift: string) {
   return json(await authFetch(token, `/attendance/scheduled?attendance_date=${date}&shift_code=${shift}`), "Failed to load scheduled attendance");
-}
-
-export async function submitOwnAttendance(token: string, data: { attendance_date: string; shift_code: string }) {
-  return json(await authFetch(token, "/attendance/", { method: "POST", body: JSON.stringify(data) }), "Failed to submit attendance");
-}
-
-export async function verifyAttendance(token: string, attendanceId: number) {
-  return json(await authFetch(token, `/attendance/${attendanceId}/verify`, { method: "POST" }), "Failed to verify attendance");
-}
-
-export async function markAttendance(token: string, data: any) {
-  return json(await authFetch(token, "/attendance/mark", { method: "POST", body: JSON.stringify(data) }), "Failed to record attendance");
-}
-
-export async function bulkAttendance(token: string, data: { attendance_date: string; shift_code: string; action?: string; staff_ids?: number[] }) {
-  return json(await authFetch(token, "/attendance/bulk", { method: "POST", body: JSON.stringify(data) }), "Failed to bulk update attendance");
 }
 
 /** The signed-in officer's own published duties (works for any role linked to a staff profile). */

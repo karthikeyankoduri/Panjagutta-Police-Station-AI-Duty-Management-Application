@@ -1,0 +1,15 @@
+# Evaluation override: web on http://localhost:3000 and API on http://localhost:8000
+# (also reachable from phones as http://<PC-IP>:3000 and http://<PC-IP>:8000).
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+# Not for production: use the HTTPS proxy setup in docker-compose.yml alone instead.
+services:
+  backend:
+    ports:
+      - "8000:8000"
+  frontend:
+    build:
+      args:
+        # Empty = the browser calls the API on the same host, port 8000
+        NEXT_PUBLIC_API_URL: ""
+    ports:
+      - "3000:3000"

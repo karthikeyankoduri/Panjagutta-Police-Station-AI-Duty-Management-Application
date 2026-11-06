@@ -80,6 +80,8 @@ async def get_current_user(
             session.invalidated_at = datetime.now(timezone.utc)
             from app.services.audit import AuditAction, log_event
             await log_event(db, actor=user, action=AuditAction.SESSION_EXPIRED, entity_type="User", entity_id=user.id)
+            from app.services.attendance_auto import record_sign_out
+            await record_sign_out(db, user, when=last)  # the last activity is the check-out
             await db.commit()
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired due to inactivity")
 

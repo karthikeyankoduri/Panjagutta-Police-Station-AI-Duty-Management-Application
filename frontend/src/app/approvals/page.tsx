@@ -11,16 +11,20 @@ import {
   rejectLeave,
   authorizeMovement,
   rejectMovement,
-  verifyAttendance,
   resolveAlert,
   askAI,
   formatApiError,
   InboxData,
+  DutyChangeRequest,
+  getDutyChangeRequests,
+  approveDutyChangeRequest,
+  rejectDutyChangeRequest,
 } from "@/lib/api";
 
 export default function ApprovalsPage() {
   const { token, user } = useAuth();
   const [inbox, setInbox] = useState<InboxData | null>(null);
+  const [dutyRequests, setDutyRequests] = useState<DutyChangeRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState<{ text: string; type: "info" | "warning" } | null>(null);
 
@@ -37,7 +41,12 @@ export default function ApprovalsPage() {
     if (!token) return;
     setLoading(true);
     try {
-      setInbox(await getInbox(token));
+      const [ib, dcr] = await Promise.all([
+        getInbox(token),
+        getDutyChangeRequests(token, { status: "pending" }).catch(() => []),
+      ]);
+      setInbox(ib);
+      setDutyRequests(dcr);
     } catch (err: any) {
       setMessage({ text: formatApiError(err, "Failed to load approvals"), type: "warning" });
     } finally {
@@ -80,7 +89,7 @@ export default function ApprovalsPage() {
       <div className="page-header">
         <div>
           <h1 className="page-title">Approvals &amp; Alerts</h1>
-          <div className="page-subtitle">Everything waiting on you: roster approvals, leave decisions, movement authorizations, attendance verification and alerts.</div>
+          <div className="page-subtitle">Everything waiting on you: roster approvals, leave decisions, movement authorizations and alerts.</div>
         </div>
         <button className="btn btn-secondary btn-sm" onClick={loadData}>↻ Refresh</button>
       </div>
@@ -118,8 +127,8 @@ export default function ApprovalsPage() {
           ["Total waiting", c?.total ?? 0, (c?.total ?? 0) > 0 ? "#eab308" : "#22c55e"],
           ["Rosters to approve", c?.rosters ?? 0, "#38bdf8"],
           ["Leave decisions", c?.leave ?? 0, "#eab308"],
+          ["Duty changes", dutyRequests.length, dutyRequests.length > 0 ? "#f43f5e" : "#22c55e"],
           ["Movements to authorize", c?.movements ?? 0, "#f97316"],
-          ["Attendance to verify", c?.attendance ?? 0, "#22c55e"],
           ["Open alerts", c?.alerts ?? 0, (c?.alerts ?? 0) > 0 ? "#ef4444" : "#22c55e"],
         ].map(([label, n, color]) => (
           <div className="card" key={label as string}>
@@ -217,17 +226,37 @@ export default function ApprovalsPage() {
             </Section>
           )}
 
-          {canSupervise && (
-            <Section title={`Attendance submitted, awaiting verification (${inbox.attendance.length})`} empty="No attendance awaiting verification this month." show={true} count={inbox.attendance.length}>
+          {canDecideLeave && (
+            <Section title={`Duty change requests (${dutyRequests.length})`} empty="No pending duty change requests." show={true} count={dutyRequests.length}>
               <table className="table">
-                <thead><tr><th>Officer</th><th>Date</th><th>Shift</th><th>Action</th></tr></thead>
+                <thead><tr><th>Officer</th><th>Current Assignment</th><th>Requested Change</th><th>Reason</th><th>Submitted</th><th>Action</th></tr></thead>
                 <tbody>
-                  {inbox.attendance.map((a) => (
-                    <tr key={a.id}>
-                      <td><strong>{a.staff_name || `Staff #${a.staff_id}`}</strong><div className="text-muted" style={{ fontSize: 11 }}>{a.service_number}</div></td>
-                      <td>{a.date}</td>
-                      <td>{a.shift_code}</td>
-                      <td><button className="btn btn-success btn-sm" onClick={() => act(() => verifyAttendance(token!, a.id), "Attendance verified.")}>Verify</button></td>
+                  {dutyRequests.map((req) => (
+                    <tr key={req.id}>
+                      <td>
+                        <strong>{req.officer_name}</strong>
+                        <div className="text-muted" style={{ fontSize: 11 }}>{req.service_number}</div>
+                      </td>
+                      <td>
+                        <div>{req.current_roster_date} &middot; Shift {req.current_shift_code}</div>
+                        <div className="text-muted" style={{ fontSize: 11 }}>{req.current_duty_category || "General / Unassigned"}</div>
+                      </td>
+                      <td>
+                        <div>Shift {req.requested_shift_code || req.current_shift_code}</div>
+                        <div className="text-muted" style={{ fontSize: 11 }}>{req.requested_duty_category || "Any"}</div>
+                      </td>
+                      <td style={{ fontSize: 12, maxWidth: 220 }}>{req.reason}</td>
+                      <td style={{ fontSize: 12 }}>{req.submitted_at ? new Date(req.submitted_at).toLocaleString() : "—"}</td>
+                      <td style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        <button className="btn btn-success btn-sm" onClick={() => {
+                          const remarks = ask("Approval remarks (optional):");
+                          if (remarks !== null) act(() => approveDutyChangeRequest(token!, req.id, remarks || undefined), `Duty change request #${req.id} approved.`);
+                        }}>Approve</button>
+                        <button className="btn btn-danger btn-sm" onClick={() => {
+                          const remarks = ask("Reason for rejection (required):");
+                          if (remarks) act(() => rejectDutyChangeRequest(token!, req.id, remarks), `Duty change request #${req.id} rejected.`);
+                        }}>Reject</button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>

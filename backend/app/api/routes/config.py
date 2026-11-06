@@ -6,7 +6,7 @@ Shift timings, duty requirements and rotation rules have their own routes
 """
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -20,7 +20,8 @@ from app.services.audit import AuditAction, log_event
 
 router = APIRouter(prefix="/config", tags=["Configuration"])
 
-LIST_NAMES = ("staff_status", "leave_status", "task_status", "leave_type", "designation", "staff_category")
+LIST_NAMES = ("staff_status", "leave_status", "task_status", "leave_type", "designation", "staff_category",
+              "dashboard_card")
 
 
 class SectorIn(BaseModel):
@@ -181,6 +182,33 @@ async def get_lists(current_user: User = Depends(get_current_user), db: AsyncSes
             "sort_order": r.sort_order, "is_active": r.is_active,
         })
     return out
+
+
+class DashboardCardsIn(BaseModel):
+    cards: Dict[str, bool]
+
+
+@router.put("/dashboard-cards")
+async def set_dashboard_cards(payload: DashboardCardsIn,
+                              current_user: User = Depends(require_roles(*STATION_ADMINS)),
+                              db: AsyncSession = Depends(get_db)):
+    """Show or hide dashboard KPI cards in one audited save (SHO, Admin SI, Super Admin)."""
+    rows = {r.code: r for r in (await db.execute(
+        select(ConfigListItem).where(ConfigListItem.list_name == "dashboard_card"))).scalars().all()}
+    unknown = [k for k in payload.cards if k not in rows]
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Unknown dashboard card(s): {', '.join(sorted(unknown))}")
+    old, new = {}, {}
+    for code, shown in payload.cards.items():
+        if rows[code].is_active != shown:
+            old[code] = rows[code].is_active
+            new[code] = shown
+            rows[code].is_active = shown
+    if new:
+        await log_event(db, actor=current_user, action=AuditAction.CONFIG_UPDATED, entity_type="DashboardCards",
+                        old_values=old, new_values=new)
+    await db.commit()
+    return {"detail": "Dashboard cards updated", "changed": sorted(new)}
 
 
 @router.post("/lists/{list_name}", status_code=201)

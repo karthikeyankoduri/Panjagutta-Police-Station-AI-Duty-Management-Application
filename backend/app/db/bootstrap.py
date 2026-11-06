@@ -46,6 +46,15 @@ DUTIES = [
     dict(category="Station Writer", section="Station Office"),
 ]
 
+# Dashboard KPI cards an administrator can show or hide (code = card key used by the dashboard API).
+DASHBOARD_CARDS = [
+    ("total_staff", "Total Staff"), ("scheduled_current_shift", "Scheduled"), ("present", "Present"),
+    ("on_duty", "On Duty"), ("available", "Available"), ("field_duty", "Field Duty"),
+    ("court_duty", "Court Duty"), ("patrol_beat", "Patrol / Beat"), ("on_leave", "On Leave"),
+    ("duty_off_rest", "Duty Off / Rest"), ("attached_other_wing", "Attached"),
+    ("official_movement", "Official Movement"), ("absent", "Absent"), ("vacant_positions", "Vacant Positions"),
+]
+
 SECTIONS = ["Court", "Reception", "Station Office", "Patrol", "Beat", "Drivers", "Sector", "Attached"]
 
 LEAVE_TYPES = [
@@ -107,6 +116,9 @@ async def ensure_config(db: AsyncSession) -> None:
         item("designation", d.value, d.value, n)
     for n, c in enumerate(StaffCategory):
         item("staff_category", c.value, c.value.replace("_", " ").title(), n)
+    # All cards start shown so nothing disappears on upgrade until an administrator hides it.
+    for n, (code, label) in enumerate(DASHBOARD_CARDS):
+        item("dashboard_card", code, label, n)
 
     await db.commit()
 

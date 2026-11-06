@@ -27,6 +27,8 @@ from app.models.models import (
     Task, TaskStatus,
 )
 from app.services.audit import log_event, AuditAction
+from app.services.shifts import now_local
+from app.services.task_categories import CATEGORY_LABELS, normalise as normalise_category
 from app.services.notifications import (
     LEAVE_APPROVER_ROLES, MOVEMENT_APPROVER_ROLES, notify_roles, notify_staff, staff_sector,
 )
@@ -610,41 +612,9 @@ async def _get_movement_or_404(db, movement_id):
 attendance_router = APIRouter(prefix="/attendance", tags=["Attendance"])
 
 
-class AttendanceIn(BaseModel):
-    staff_id: Optional[int] = None
-    attendance_date: date_type
-    shift_code: ShiftCode
-
-
-class AttendanceMarkIn(BaseModel):
-    staff_id: Optional[int] = None
-    attendance_date: date_type
-    shift_code: ShiftCode
-    is_confirmed: Optional[bool] = None
-    status: Optional[str] = None
-    notes: Optional[str] = None
-
-
-class AttendanceBulkIn(BaseModel):
-    attendance_date: date_type
-    shift_code: ShiftCode
-    action: str = "confirm_all"
-    staff_ids: Optional[List[int]] = None
-
-
 async def _resolve_self_staff_id(db: AsyncSession, user: User) -> Optional[int]:
-    if user.staff_id:
-        return user.staff_id
-    res = await db.execute(
-        select(Staff.id).where(
-            or_(
-                func.lower(Staff.service_number) == user.username.lower().replace("_", ""),
-                func.lower(Staff.service_number) == user.username.lower(),
-                func.lower(Staff.service_number) == user.username.lower().replace("_", "-"),
-            )
-        )
-    )
-    return res.scalars().first()
+    from app.services.attendance_auto import resolve_staff_id
+    return await resolve_staff_id(db, user)
 
 
 @attendance_router.get("/")
@@ -666,7 +636,7 @@ async def get_attendance(
     if start_date and end_date:
         query = query.where(Attendance.attendance_date.between(start_date, end_date))
     else:
-        target_date = attendance_date or date_type.today()
+        target_date = attendance_date or now_local().date()
         query = query.where(Attendance.attendance_date == target_date)
 
     if shift_code:
@@ -718,14 +688,29 @@ async def get_attendance(
             "verified_by": users.get(a.verified_by_id),
             "verified_at": a.verified_at.isoformat() if a.verified_at else None,
             "notes": a.notes,
+            "check_in_at": a.check_in_at.isoformat() if a.check_in_at else None,
+            "check_out_at": a.check_out_at.isoformat() if a.check_out_at else None,
+            "is_late": bool(a.is_late),
+            "source": a.source or "MANUAL",
         }
         for a in records
     ]
 
 
+@attendance_router.get("/current-shift")
+async def attendance_current_shift(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The shift running now (station time) and its duty date, so screens open on the right shift."""
+    from app.services.shifts import current_shift, load_shift_timings
+    code, duty_date = current_shift(await load_shift_timings(db))
+    return {"shift_code": code.value, "date": str(duty_date)}
+
+
 @attendance_router.get("/scheduled")
 async def scheduled_vs_confirmed(
-    attendance_date: date_type = Query(default_factory=date_type.today),
+    attendance_date: date_type = Query(default_factory=lambda: now_local().date()),
     shift_code: ShiftCode = Query(...),
     current_user: User = Depends(require_roles(*OFFICERS)),
     db: AsyncSession = Depends(get_db),
@@ -754,6 +739,9 @@ async def scheduled_vs_confirmed(
             "scheduled": sid in scheduled_ids,
             "submitted": bool(a and a.submitted_at), "confirmed": bool(a and a.is_confirmed),
             "attendance_id": a.id if a else None,
+            "check_in_at": a.check_in_at.isoformat() if a and a.check_in_at else None,
+            "check_out_at": a.check_out_at.isoformat() if a and a.check_out_at else None,
+            "is_late": bool(a and a.is_late),
         })
     return {
         "date": str(attendance_date), "shift": shift_code.value,
@@ -766,227 +754,6 @@ async def scheduled_vs_confirmed(
     }
 
 
-@attendance_router.post("/mark")
-async def mark_attendance(
-    payload: AttendanceMarkIn,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    resolved_self_staff_id = await _resolve_self_staff_id(db, current_user)
-
-    if current_user.role == UserRoleEnum.STAFF:
-        if payload.staff_id != resolved_self_staff_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Staff cannot modify roll-call for other personnel.",
-            )
-    else:
-        await ensure_staff_in_scope(db, current_user, payload.staff_id)
-
-    confirmed = True if (payload.status == "Present" or payload.is_confirmed is True) else False
-    # Staff may submit but never verify their own attendance.
-    if current_user.role == UserRoleEnum.STAFF:
-        confirmed = False
-
-    result = await db.execute(
-        select(Attendance).where(
-            and_(
-                Attendance.staff_id == payload.staff_id,
-                Attendance.attendance_date == payload.attendance_date,
-                Attendance.shift_code == payload.shift_code,
-            )
-        )
-    )
-    att = result.scalar_one_or_none()
-    old_values = {"confirmed": att.is_confirmed} if att else None
-
-    now_utc = datetime.now(timezone.utc)
-    if att:
-        att.is_confirmed = confirmed
-        att.is_scheduled = True
-        if confirmed:
-            att.verified_by_id = current_user.id
-            att.verified_at = now_utc
-        else:
-            att.verified_by_id = None
-            att.verified_at = None
-        if payload.notes:
-            att.notes = payload.notes
-    else:
-        att = Attendance(
-            staff_id=payload.staff_id or current_user.staff_id,
-            attendance_date=payload.attendance_date,
-            shift_code=payload.shift_code,
-            is_scheduled=True,
-            is_confirmed=confirmed,
-            submitted_by_id=current_user.id,
-            submitted_at=now_utc,
-            verified_by_id=current_user.id if confirmed else None,
-            verified_at=now_utc if confirmed else None,
-            notes=payload.notes,
-        )
-        db.add(att)
-
-    await db.flush()
-    await log_event(
-        db,
-        actor=current_user,
-        action=AuditAction.ATTENDANCE_VERIFIED if confirmed else AuditAction.ATTENDANCE_SUBMITTED,
-        entity_type="Attendance",
-        entity_id=att.id,
-        old_values=old_values,
-        new_values={"staff_id": payload.staff_id, "confirmed": confirmed, "shift": payload.shift_code.value},
-    )
-    await db.commit()
-    return {
-        "id": att.id,
-        "staff_id": att.staff_id,
-        "is_confirmed": att.is_confirmed,
-        "status": "Present" if att.is_confirmed else "Absent",
-        "detail": f"Attendance recorded as {'Present' if confirmed else 'Absent'}",
-    }
-
-
-@attendance_router.post("/bulk")
-async def bulk_attendance(
-    payload: AttendanceBulkIn,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    if current_user.role == UserRoleEnum.STAFF:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Bulk attendance confirmation is restricted to supervisory officers.",
-        )
-    scope = sector_scope(current_user)
-    target_ids = payload.staff_ids
-    if not target_ids:
-        q = select(Staff.id).where(Staff.is_active == True)
-        if scope is not None:
-            q = q.where(Staff.sector_id == scope)
-        staff_res = await db.execute(q)
-        target_ids = list(staff_res.scalars().all())
-    elif scope is not None:
-        res = await db.execute(select(Staff.id).where(Staff.id.in_(target_ids), Staff.sector_id == scope))
-        allowed = set(res.scalars().all())
-        if set(target_ids) - allowed:
-            raise HTTPException(status_code=403, detail="Sector SI can only confirm attendance for their own sector")
-
-    now_utc = datetime.now(timezone.utc)
-    updated_count = 0
-    for sid in target_ids:
-        result = await db.execute(
-            select(Attendance).where(
-                and_(
-                    Attendance.staff_id == sid,
-                    Attendance.attendance_date == payload.attendance_date,
-                    Attendance.shift_code == payload.shift_code,
-                )
-            )
-        )
-        att = result.scalar_one_or_none()
-        if att:
-            att.is_confirmed = True
-            att.is_scheduled = True
-            att.verified_by_id = current_user.id
-            att.verified_at = now_utc
-        else:
-            att = Attendance(
-                staff_id=sid,
-                attendance_date=payload.attendance_date,
-                shift_code=payload.shift_code,
-                is_scheduled=True,
-                is_confirmed=True,
-                submitted_by_id=current_user.id,
-                submitted_at=now_utc,
-                verified_by_id=current_user.id,
-                verified_at=now_utc,
-            )
-            db.add(att)
-        updated_count += 1
-
-    await log_event(db, actor=current_user, action=AuditAction.ATTENDANCE_BULK_CONFIRMED, entity_type="Attendance",
-                    new_values={"date": payload.attendance_date, "shift": payload.shift_code.value,
-                                "staff_ids": list(target_ids), "count": updated_count})
-    await db.commit()
-    return {"updated_count": updated_count, "detail": f"Confirmed attendance for {updated_count} personnel."}
-
-
-@attendance_router.post("/", status_code=201)
-async def submit_attendance(
-    payload: AttendanceIn,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Staff self-submission (web). Must match a published assignment; an officer verifies it."""
-    staff_id = payload.staff_id or await _resolve_self_staff_id(db, current_user)
-    if not staff_id:
-        raise HTTPException(status_code=422, detail="This login is not linked to a staff profile")
-    if current_user.role == UserRoleEnum.STAFF and staff_id != current_user.staff_id:
-        raise HTTPException(status_code=403, detail="Staff can only submit their own attendance")
-    await ensure_staff_in_scope(db, current_user, staff_id)
-
-    # The system validates the shift (guide §9.1 step 4): a published assignment must exist.
-    from app.services.availability import latest_published_rosters
-    latest = await latest_published_rosters(db, payload.attendance_date, payload.attendance_date)
-    roster = latest.get((payload.attendance_date, payload.shift_code))
-    assigned = False
-    if roster:
-        res = await db.execute(select(RosterAssignment.id).where(
-            RosterAssignment.roster_id == roster.id, RosterAssignment.staff_id == staff_id))
-        assigned = res.scalars().first() is not None
-    if current_user.role == UserRoleEnum.STAFF and not assigned:
-        raise HTTPException(status_code=400, detail="You have no published duty for this date and shift")
-
-    existing = await db.execute(
-        select(Attendance).where(
-            and_(
-                Attendance.staff_id == staff_id,
-                Attendance.attendance_date == payload.attendance_date,
-                Attendance.shift_code == payload.shift_code,
-            )
-        )
-    )
-    if existing.scalar_one_or_none():
-        raise HTTPException(status_code=409, detail="Attendance already submitted for this staff/date/shift")
-
-    att = Attendance(
-        staff_id=staff_id,
-        attendance_date=payload.attendance_date,
-        shift_code=payload.shift_code,
-        is_scheduled=assigned,
-        submitted_by_id=current_user.id,
-        submitted_at=datetime.now(timezone.utc),
-    )
-    db.add(att)
-    await db.flush()
-    await log_event(db, actor=current_user, action=AuditAction.ATTENDANCE_SUBMITTED, entity_type="Attendance",
-                    entity_id=att.id, new_values={**payload.model_dump(mode="json"), "staff_id": staff_id})
-    await db.commit()
-    return {"id": att.id, "message": "Attendance submitted. Awaiting officer verification."}
-
-
-@attendance_router.post("/{attendance_id}/verify")
-async def verify_attendance(
-    attendance_id: int,
-    current_user: User = Depends(require_roles(*SUPERVISORS)),
-    db: AsyncSession = Depends(get_db),
-):
-    result = await db.execute(select(Attendance).where(Attendance.id == attendance_id))
-    att = result.scalar_one_or_none()
-    if not att:
-        raise HTTPException(status_code=404, detail="Attendance record not found")
-    await ensure_staff_in_scope(db, current_user, att.staff_id)
-
-    att.is_confirmed = True
-    att.verified_by_id = current_user.id
-    att.verified_at = datetime.now(timezone.utc)
-    await log_event(db, actor=current_user, action=AuditAction.ATTENDANCE_VERIFIED, entity_type="Attendance",
-                    entity_id=attendance_id, old_values={"confirmed": False}, new_values={"confirmed": True})
-    await db.commit()
-    return {"detail": "Attendance verified and confirmed"}
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Tasks
 # ─────────────────────────────────────────────────────────────────────────────
@@ -995,6 +762,8 @@ task_router = APIRouter(prefix="/tasks", tags=["Tasks"])
 
 class TaskIn(BaseModel):
     description: str
+    category: str  # required for every new task
+    custom_title: Optional[str] = None  # the header for category OTHERS
     assignee_id: int
     reporting_officer_id: Optional[int] = None
     start_time: Optional[datetime] = None
@@ -1003,6 +772,8 @@ class TaskIn(BaseModel):
 
 class TaskUpdateIn(BaseModel):
     description: Optional[str] = None
+    category: Optional[str] = None
+    custom_title: Optional[str] = None
     assignee_id: Optional[int] = None
     reporting_officer_id: Optional[int] = None
     expected_completion: Optional[datetime] = None
@@ -1018,6 +789,10 @@ def _task_out(t: Task, staff_map: Dict[int, Staff]) -> dict:
     r = staff_map.get(t.reporting_officer_id) if t.reporting_officer_id else None
     return {
         "id": t.id, "description": t.description,
+        "category": t.category, "category_label": CATEGORY_LABELS.get(t.category, "Others"),
+        "custom_title": t.custom_title,
+        "group_title": (t.custom_title or CATEGORY_LABELS.get(t.category, "Others")) if t.category == "OTHERS"
+        else CATEGORY_LABELS.get(t.category, "Others"),
         "assignee_id": t.assignee_id,
         "assignee_name": a.name if a else None,
         "assignee_service_number": a.service_number if a else None,
@@ -1041,14 +816,21 @@ async def create_task(
     await ensure_staff_in_scope(db, current_user, payload.assignee_id)
     if payload.expected_completion and payload.start_time and payload.expected_completion < payload.start_time:
         raise HTTPException(status_code=422, detail="Expected completion cannot be before the start time")
-    task = Task(**payload.model_dump(), created_by_id=current_user.id)
+    try:
+        category, custom_title = normalise_category(payload.category, payload.custom_title)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    fields = payload.model_dump()
+    fields.update(category=category, custom_title=custom_title)
+    task = Task(**fields, created_by_id=current_user.id)
     if task.start_time is None:
         task.start_time = datetime.now(timezone.utc)
     db.add(task)
     await db.flush()
     await log_event(db, actor=current_user, action=AuditAction.TASK_CREATED, entity_type="Task",
                     entity_id=task.id, new_values=payload.model_dump(mode="json"))
-    await notify_staff(db, payload.assignee_id, "New task assigned", payload.description[:200],
+    heading = custom_title if category == "OTHERS" else CATEGORY_LABELS[category]
+    await notify_staff(db, payload.assignee_id, f"New task assigned · {heading}", payload.description[:200],
                        category="task", entity_type="Task", entity_id=task.id)
     await db.commit()
     return {"id": task.id, "status": task.status.value}
@@ -1066,6 +848,12 @@ async def update_task(
         raise HTTPException(status_code=404, detail="Task not found")
     await ensure_staff_in_scope(db, current_user, task.assignee_id)
     changes = payload.model_dump(exclude_none=True)
+    if "category" in changes or "custom_title" in changes:
+        try:
+            changes["category"], changes["custom_title"] = normalise_category(
+                changes.get("category", task.category), changes.get("custom_title", task.custom_title))
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
     if "assignee_id" in changes:
         await ensure_staff_in_scope(db, current_user, changes["assignee_id"])
     old = {k: getattr(task, k) for k in changes}
@@ -1120,6 +908,7 @@ async def list_tasks(
     assignee_id: Optional[int] = Query(None),
     task_status: Optional[str] = Query(None),
     overdue_only: bool = Query(False),
+    category: Optional[str] = Query(None),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -1130,6 +919,8 @@ async def list_tasks(
         query = query.where(Task.status == task_status)
     if overdue_only:
         query = query.where(Task.is_overdue == True)
+    if category:
+        query = query.where(Task.category == category.strip().upper())
     result = await db.execute(query.order_by(Task.created_at.desc()))
     tasks = result.scalars().all()
     staff_map, _ = await _names(db, [t.assignee_id for t in tasks] + [t.reporting_officer_id for t in tasks])

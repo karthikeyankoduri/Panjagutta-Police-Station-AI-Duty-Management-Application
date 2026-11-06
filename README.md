@@ -54,10 +54,10 @@ The **Panjagutta Police Station AI Duty Management System** is a full-stack, rol
 |---|---|
 | **Staff register** | 88+ officers, photo, designation, sector, contact — import or add manually |
 | **Shift rosters** | 3-shift (A/B/C 08-hour) versioned rosters with SHO approval gate |
-| **Attendance** | Per-shift roll-call with bulk confirm; personal monthly calendar for staff |
+| **Attendance** | Recorded automatically from sign-in and sign-out (no manual marking); station view, personal monthly calendar |
 | **Leave** | Submit, approve/reject with roster-vacancy alerts |
 | **Outside movements** | Court, field duty, hospital, personal; supervisor authorises departure & return |
-| **Tasks** | Assign to officers; track Not Started → In Progress → Completed |
+| **Tasks** | Assign to officers by category (Regular Duty, Bandobast, VIP Movement, Traffic, Vehicle Checking, Others with a custom header); track Not Started → In Progress → Completed |
 | **Duty allocation** | Duty-master categories tied to rosters |
 | **Attachments** | Upload documents to any entity (leave, movement, task) with expiry tracking |
 | **Operational dashboard** | Live station strength, staff status grid, overdue tasks, recent alerts |
@@ -571,7 +571,7 @@ A visual grid of every officer on duty. Each cell shows:
 - Expired or expiring attachments
 
 **4. Quick Actions**
-- Mark today's attendance (shortcut to Attendance page)
+- Today's attendance (shortcut to the Attendance page; it is recorded automatically at sign-in)
 - Approve pending leave (shortcut to Approvals page)
 
 > **Staff role:** Staff do not see the Operational Dashboard. They are redirected to their Attendance (personal view) page after login.
@@ -675,46 +675,41 @@ Published rosters are locked. To make changes:
 
 **URL:** `/attendance`
 
-Attendance tracking works differently depending on your role.
+Attendance is **recorded automatically from signing in and out**. Nobody marks, submits, confirms or verifies attendance by hand, on the web or in the Android app.
+
+#### How it is recorded
+
+- **Who is tracked:** every login linked to a staff record (Staff, DSI, DI, Sector SI, Admin SI, SHO). Super Admin and accounts with no staff record are not tracked.
+- **Sign in:** every sign-in marks you **Present** immediately. If you are on a **published** roster for a shift running now (or starting within **60 minutes**), it is recorded against that shift as *scheduled*, and signing in more than **15 minutes after** its start is flagged **Late**. A night shift that runs past midnight belongs to the day it started.
+- **Sign in with no rostered shift** (or no published roster yet): you are still Present, recorded against the shift running at that moment, but marked *not scheduled* and never Late.
+- **Sign out:** pressing Sign out records your check-out time. If you just close the app or the session times out, the **last time you used the system** is recorded as the check-out by a background job that runs every 5 minutes.
+- **Signing in again** during the same shift keeps your first sign-in time and extends the check-out.
+- Both limits are settings: `ATTENDANCE_EARLY_SIGNIN_MINUTES` (default 60) and `ATTENDANCE_LATE_GRACE_MINUTES` (default 15).
+- Leave, attachment, rest and outside-movement status still override attendance in the dashboard, exactly as before.
+
+> **If someone cannot sign in:** there is no supervisor override. They should sign in as soon as they can; a late sign-in still counts and is flagged Late. Sign-in shows the account was used, not where the person is.
 
 #### For Supervisors (Admin SI, SHO, DI, DSI, Sector SI)
 
-You see **two tabs** at the top:
+You see **three tabs**, all read-only:
 
 **Tab 1: 🏢 Station Roll-Call Console**
-
-Used to record the daily parade/roll-call for the entire station.
-
-1. Select the **Date** (defaults to today).
-2. Select the **Shift** (A / B / C).
-3. Click **Load Roll-Call**.
-4. The table shows all active officers with their expected duty status.
-5. For each officer:
-   - Click **✅ Present** to mark them confirmed present.
-   - Click **❌ Absent** to mark them absent.
-6. **Bulk Confirm All Present** — confirms all displayed officers as Present in one click (useful at end of morning parade).
-7. The **search bar** filters by name, service number, or designation.
-
-**Strength Metrics Cards (top of table):**
-- Station Strength, Scheduled, Present, Absent, Pending
+1. Select the **Date** (defaults to today) and the **Shift** (A / B / C).
+2. The table lists every active officer with their roster status, attendance status (Present, Not signed in, Unscheduled, Off-shift), a **Late** badge, **Signed in** and **Signed out** times and time on duty.
+3. The **search bar** filters by name, service number, or designation.
+4. Metric cards: Station Strength, Scheduled, Signed in, Signed in late, Scheduled but not signed in.
 
 **Tab 2: 👤 My Personal Attendance & Calendar**
+- Navigate months using **◀ ▶**, **Today** jumps to the current month.
+- Each day shows a pill: 🟢 Present, 🟡 Late, ⬜ Unscheduled sign-in, or no pill when nothing was recorded.
+- **Click any day** for the detail card: shift, whether you were on the roster, and your sign-in and sign-out times.
+- The **History Ledger** lists every record for the month. Records marked by a supervisor before automatic attendance began are labelled *Supervisor-marked*.
 
-Your own personal attendance record and monthly calendar.
-- Navigate months using **◀ ▶** arrows.
-- Click **Today** to jump to the current month.
-- Each day shows a colour-coded pill:
-  - 🟢 **Green** — Present/Confirmed
-  - 🔴 **Red** — Absent/Not confirmed
-  - 🟡 **Amber** — Scheduled but unconfirmed (Pending)
-  - ⬜ **Grey** — No record / not scheduled
-- **Click any day** to see the full duty detail card below the calendar:
-  - Date, shift, confirmation status, verifying officer, verification time, and remarks.
-- Below the calendar is the **History Ledger** — a table of all attendance records for the selected month.
+**Tab 3: 🧾 Scheduled vs Signed in** — the latest published roster for a date and shift beside who has actually signed in.
 
 #### For Staff (Constable / PC / HC)
 
-You see **only** the personal attendance view — no station-wide data is ever accessible. The calendar and history ledger work exactly as described above but show **only your own records**.
+You see **only** your own attendance (calendar, history, and today's published duty with *Signed in 09:02* / *Not signed in yet*). No station-wide data is ever accessible.
 
 > **Security note:** Even if a staff member manually modifies the URL to try to access another officer's records, the backend enforces strict scoping — it will only ever return the logged-in officer's own records.
 
@@ -812,14 +807,17 @@ Assign and track action items assigned to officers.
 #### Creating a task (Supervisors only)
 
 1. Navigate to **Tasks**.
-2. Click **+ New Task**.
+2. Click **+ Assign New Task**.
 3. Fill in:
-   - **Title** — brief task name
-   - **Description** — detailed instructions
-   - **Assigned To** — select the officer
-   - **Priority** — Low, Normal, High, Urgent
-   - **Due Date** — task deadline
-4. Click **Create Task**.
+   - **Category** (required) — one of **Regular Duty**, **Bandobast**, **VIP Movement**, **Traffic Duties**, **Vehicle Checking** or **Others**
+   - **Header** — shown only for **Others**, and required there: type the heading for the task (e.g. *Election duty*). Tasks with the same header are grouped together.
+   - **Task description** — what needs to be done
+   - **Assigned officer** — select the officer
+   - **Reporting officer** — optional
+   - **Expected completion** — optional deadline
+4. Click **Assign Task**. The officer is notified, and the notification names the category.
+
+The Tasks screen lists tasks in **one section per category** (Regular Duty, Bandobast, VIP Movement, Traffic Duties, Vehicle Checking), followed by a section for each **Others** header. Tasks created before categories existed appear under **Others** with no header. A supervisor can correct a task's category later through the API (`PATCH /api/tasks/{id}`).
 
 #### Updating task progress (assigned officer or supervisor)
 
@@ -837,7 +835,7 @@ Assign and track action items assigned to officers.
 
 - **All Tasks** (supervisors) — every task in the station
 - **My Tasks** (staff) — only tasks assigned to you
-- Filter by status, priority, assignee, or date range
+- Filter by status, category, or overdue only
 
 ---
 
@@ -951,7 +949,7 @@ An append-only, tamper-evident record of every significant action in the system.
 Every create, update, approve, reject, login, logout, and export action is recorded with:
 - **Timestamp** (UTC)
 - **Actor** (username and role)
-- **Action type** (e.g. `ROSTER_APPROVED`, `LEAVE_REJECTED`, `ATTENDANCE_VERIFIED`)
+- **Action type** (e.g. `ROSTER_APPROVED`, `LEAVE_REJECTED`, `ATTENDANCE_SIGNED_IN`)
 - **Entity** (what was affected, e.g. "RosterAssignment #42", "LeaveRequest #7")
 - **Old values / New values** (JSON diff of what changed)
 - **IP Address**
@@ -999,59 +997,47 @@ System-wide settings managed by the Super Admin:
 
 ## 12. User Manual — Android App
 
-The Android app provides staff (and supervisors) with a mobile interface for the most frequently used features.
+The Android app works like the web application. After you sign in, the app builds its menu from **your role**, so each person sees the same modules and the same actions as on the web. The server still enforces every permission; the app only hides what your role cannot use.
 
-### First launch
+### First launch and sign-in
 
-1. Open the **Panjagutta Duty Management** app on your Android device.
-2. On the **Server Configuration** screen, enter the backend API address:
-   - If connecting to the Docker server on your office network: `http://192.168.x.x:8000` (replace with server IP)
-   - The server address is saved automatically after first successful login.
-3. Tap **Save**.
+1. Open the **Panjagutta Duty Management** app.
+2. Tap **API CONNECTION SETTINGS** and enter the backend address if it is not already set (for example `http://192.168.x.x:8000` on the office network, or the department's `https://` address). Tap **Check API connection** to test it.
+3. Enter your **username** and **password**, then tap **Sign in**.
+4. If your account uses a temporary password, the app asks you to set your own before continuing.
 
-### Login
+### What each role sees
 
-1. Enter your **username** and **password**.
-2. Tap **Sign In**.
-3. On success, you are taken to the **Home** tab.
+| Role | Bottom bar | More menu |
+|---|---|---|
+| **STAFF** | Home · Calendar · Roster · Attendance · Requests (your own duties, attendance, leave and outside movements) | Workflow guide (from your profile) |
+| **SHO / Admin SI / Super Admin** | Dashboard · Roster · Approvals · Attendance · **More** | Staff & CSV Import, Duty Allocation, Tasks, Outside Movements, Leave & Rest, Attachments, Reports, Policy & Shifts, Configuration, Audit Log, Workflow Guide |
+| **Sector SI** | Dashboard · Roster · Approvals · Attendance · **More** | Duty Allocation (read-only), Tasks, Outside Movements, Leave & Rest, Attachments, Reports, Workflow Guide. Data is limited to your sector. |
+| **DI / DSI** | Dashboard · Roster · Approvals · Attendance · **More** | Tasks, Outside Movements, Leave & Rest, Attachments, Reports, Workflow Guide. Mostly read-only; Approvals shows alerts only. |
 
-### Home Tab
+The bell (top right) opens notifications; tapping one opens the related module. The avatar beside it opens your profile (name, role, service number, designation, sector, section, phone, reporting officer, last sign-in and more, loaded fresh each time), where you can change your password and sign out. The web app has the same profile button beside its bell. Pull down on any screen to refresh. The Android Back key returns to the previous view, and from any module back to your landing screen.
 
-Displays a personal summary for the logged-in officer:
-- **Today's shift** — shift code, timings, duty category assigned
-- **Attendance status** — whether you are marked present for today
-- **Pending leave** — count of leave requests awaiting decision
-- **Active movements** — any open outside movements
+### Modules (officers)
 
-### Roster Tab
+- **Dashboard** — status cards (tap one to filter the staff list), current / upcoming shift, rest and vacancy views, active alerts with *Resolve*, and the full staff status list with filters and search. Which cards appear is set by the SHO, Admin SI or Super Admin under **Configuration → Dashboard cards** (web or app); it applies to everyone and only changes what the dashboard displays.
+- **Approvals & Alerts** — everything waiting on you: rosters (SHO), leave (SHO, Admin SI), movements (SHO, Admin SI, Sector SI), alerts, and the AI Station Copilot.
+- **Shift Roster** — week, month and list views; open a roster to see allocations and versions. Create a draft, **Submit** (Admin SI), **Approve / Return** (SHO), **Publish**, **Revise**, and **AI Explain**, each shown only to the roles allowed to use it.
+- **Duty Allocation** — choose a date and shift, assign officers to duty points with live rule checks, record an authorized exception (reason + authorizing officer), save the draft, then submit / approve / publish. Unsaved work is kept on the server so you can restore it later.
+- **Attendance** — read-only and automatic: *Station* (who has signed in, late, not signed in), *My Attendance* (monthly ledger with sign-in/out times) and *Scheduled vs Signed in*. Signing in to the app during your shift is what marks you present.
+- **Leave & Rest** — request leave (for yourself or, as an officer, for any staff member), approve or reject with the roster-impact preview, cancel.
+- **Outside Movements** — request or log a movement, authorize or reject, mark returned, with an overdue flag.
+- **Tasks** — assign, track and update tasks; "current task per person" view.
+- **Attachments** — record and end external attachment orders.
+- **Reports** — shift-end, daily, vacancy and workload reports, exported as PDF, Excel or CSV and shared through the Android share sheet.
+- **Staff & CSV Import**, **Policy & Shifts**, **Configuration** and **Audit Log** — station management for the SHO and Admin SI. Staff import uses the Android file picker (CSV or Excel).
 
-- View your **personal duty schedule** for the current month.
-- Tap any date to see the shift, duty category, and reporting time.
+### Modules (staff)
 
-### Attendance Tab (Calendar)
-
-- View your **monthly attendance** calendar.
-- Each day shows Present (green), Absent (red), or No record (grey).
-- Tap a day to see full details.
-
-### Leave Tab
-
-- View your **leave history** and status of pending requests.
-- Tap **+ Apply Leave** to submit a new leave request.
-- Fill in type, from/to dates, and reason, then tap **Submit**.
-
-### Navigation
-
-The bottom navigation bar has five tabs:
-- 🏠 **Home** — personal summary
-- 📅 **Roster** — duty schedule
-- ✅ **Attendance** — attendance calendar
-- 🗓️ **Leave** — leave management
-- 🔔 **Notifications** — alerts and updates
+Staff keep the personal self-service view: **Home** (today's duty, attendance, tasks), **Calendar** (duty diary), **Roster**, **Attendance** (your sign-in and sign-out times, recorded automatically) and **Requests** (leave and outside movement).
 
 ### Signing out
 
-Tap the **menu icon** (top right) → **Sign Out**.
+Tap the **avatar** (top right) → **Sign out**. The app also signs you out after the inactivity period set by the server.
 
 ---
 

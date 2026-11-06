@@ -27,6 +27,7 @@ from app.models.models import (
     UserRoleEnum,
 )
 from app.services.audit import AuditAction, log_event
+from app.services.shifts import now_local
 
 router = APIRouter(prefix="/mobile", tags=["Mobile Staff"])
 
@@ -35,10 +36,6 @@ class MobileLeaveIn(BaseModel):
     start: date
     end: date
     kind: str = Field(min_length=1, max_length=100)
-
-
-class MobileAttendanceIn(BaseModel):
-    roster_id: int
 
 
 class MobileMovementIn(BaseModel):
@@ -98,6 +95,9 @@ def _diary_entry(roster, assignment, duty, attendance, shift_times):
         "attendance_submitted_at": submitted_at,
         "attendance_confirmed": bool(attendance and attendance.is_confirmed),
         "attendance_verified_at": verified_at,
+        "check_in_at": attendance.check_in_at.isoformat() if attendance and attendance.check_in_at else None,
+        "check_out_at": attendance.check_out_at.isoformat() if attendance and attendance.check_out_at else None,
+        "is_late": bool(attendance and attendance.is_late),
     }
 
 
@@ -186,7 +186,7 @@ async def mobile_duty_diary(
 
 @router.get("/attendance")
 async def mobile_attendance(
-    attendance_date: date = Query(default_factory=date.today),
+    attendance_date: date = Query(default_factory=lambda: now_local().date()),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -197,73 +197,6 @@ async def mobile_attendance(
         _diary_entry(roster, assignment, duty, attendance, shift_times)
         for roster, assignment, duty, attendance in rows.all()
     ]
-
-
-@router.post("/attendance", status_code=201)
-async def submit_mobile_attendance(
-    payload: MobileAttendanceIn,
-    user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    person = await _linked_staff(db, user)
-    roster_result = await db.execute(
-        select(Roster).where(
-            Roster.id == payload.roster_id,
-            Roster.status == RosterStatus.PUBLISHED,
-            Roster.roster_date == date.today(),
-        )
-    )
-    roster = roster_result.scalar_one_or_none()
-    if not roster:
-        raise HTTPException(status_code=404, detail="Today's published roster was not found")
-
-    assignment_result = await db.execute(
-        select(RosterAssignment.id).where(
-            RosterAssignment.roster_id == roster.id,
-            RosterAssignment.staff_id == person.id,
-        )
-    )
-    if assignment_result.scalar_one_or_none() is None:
-        raise HTTPException(status_code=403, detail="You are not assigned to this roster")
-
-    existing_result = await db.execute(
-        select(Attendance.id).where(
-            Attendance.staff_id == person.id,
-            Attendance.attendance_date == roster.roster_date,
-            Attendance.shift_code == roster.shift_code,
-        )
-    )
-    if existing_result.scalar_one_or_none() is not None:
-        raise HTTPException(status_code=409, detail="Attendance has already been submitted for this shift")
-
-    attendance = Attendance(
-        staff_id=person.id,
-        attendance_date=roster.roster_date,
-        shift_code=roster.shift_code,
-        is_scheduled=True,
-        submitted_by_id=user.id,
-        submitted_at=datetime.now(timezone.utc),
-    )
-    db.add(attendance)
-    await db.flush()
-    await log_event(
-        db,
-        actor=user,
-        action=AuditAction.ATTENDANCE_SUBMITTED,
-        entity_type="Attendance",
-        entity_id=attendance.id,
-        new_values={
-            "staff_id": person.id,
-            "attendance_date": roster.roster_date.isoformat(),
-            "shift_code": roster.shift_code.value,
-        },
-    )
-    await db.commit()
-    return {
-        "id": attendance.id,
-        "message": "Attendance submitted. Awaiting officer verification.",
-        "submitted_at": attendance.submitted_at.isoformat(),
-    }
 
 
 @router.get("/leave")
@@ -340,6 +273,8 @@ async def mobile_attendance_history(
         "scheduled": len(entries),
         "submitted": sum(1 for e in entries if e["attendance_submitted_at"]),
         "verified": sum(1 for e in entries if e["attendance_confirmed"]),
+        "present": sum(1 for e in entries if e["attendance_confirmed"]),
+        "late": sum(1 for e in entries if e["is_late"]),
         "items": entries,
     }
 
@@ -413,6 +348,7 @@ async def mobile_tasks(
     return [
         {
             "id": t.id, "description": t.description, "status": t.status.value, "is_overdue": t.is_overdue,
+            "category": t.category, "custom_title": t.custom_title,
             "expected_completion": t.expected_completion.isoformat() if t.expected_completion else None,
             "actual_completion": t.actual_completion.isoformat() if t.actual_completion else None,
         }

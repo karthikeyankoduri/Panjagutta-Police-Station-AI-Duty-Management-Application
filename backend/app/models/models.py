@@ -10,7 +10,7 @@ from typing import Optional, List
 
 from sqlalchemy import (
     String, Integer, Boolean, DateTime, Date, Time, Text, Enum as SAEnum,
-    ForeignKey, UniqueConstraint, Index, func, JSON
+    ForeignKey, UniqueConstraint, Index, func, JSON, false
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -96,6 +96,13 @@ class RosterStatus(str, enum.Enum):
     SUBMITTED = "submitted"
     APPROVED = "approved"
     PUBLISHED = "published"
+
+
+class DutyChangeRequestStatus(str, enum.Enum):
+    PENDING   = "pending"
+    APPROVED  = "approved"
+    REJECTED  = "rejected"
+    WITHDRAWN = "withdrawn"
 
 
 class MovementStatus(str, enum.Enum):
@@ -338,6 +345,53 @@ class RosterAssignment(Base):
     )
 
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Duty Change Requests
+# ─────────────────────────────────────────────────────────────────────────────
+
+class DutyChangeRequest(Base):
+    """Officer requests a shift or duty change when rostered assignment is infeasible."""
+    __tablename__ = "duty_change_requests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    roster_id: Mapped[int] = mapped_column(Integer, ForeignKey("rosters.id"), nullable=False)
+    roster_assignment_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("roster_assignments.id"), nullable=True)
+    staff_id: Mapped[int] = mapped_column(Integer, ForeignKey("staff.id"), nullable=False)
+    requested_by_user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+
+    current_shift_code: Mapped[str] = mapped_column(String(1), nullable=False)
+    current_duty_category: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    current_roster_date: Mapped[date] = mapped_column(Date, nullable=False)
+
+    requested_shift_code: Mapped[Optional[str]] = mapped_column(String(1), nullable=True)
+    requested_duty_category: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+
+    status: Mapped[DutyChangeRequestStatus] = mapped_column(
+        SAEnum(DutyChangeRequestStatus, native_enum=False), default=DutyChangeRequestStatus.PENDING, nullable=False
+    )
+    reviewed_by_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("users.id"), nullable=True)
+    reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    reviewer_remarks: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    # Relationships
+    staff: Mapped["Staff"] = relationship("Staff", foreign_keys=[staff_id])
+    roster: Mapped["Roster"] = relationship("Roster", foreign_keys=[roster_id])
+    requested_by: Mapped["User"] = relationship("User", foreign_keys=[requested_by_user_id])
+    reviewed_by: Mapped[Optional["User"]] = relationship("User", foreign_keys=[reviewed_by_id])
+
+    __table_args__ = (
+        Index("ix_dcr_staff_id", "staff_id"),
+        Index("ix_dcr_roster_id", "roster_id"),
+        Index("ix_dcr_status", "status"),
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Attendance
 # ─────────────────────────────────────────────────────────────────────────────
@@ -357,6 +411,11 @@ class Attendance(Base):
     verified_by_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("users.id"), nullable=True)
     verified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Recorded automatically from sign-in / sign-out. source is NULL for legacy hand-marked rows.
+    check_in_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    check_out_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    source: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    is_late: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     staff: Mapped["Staff"] = relationship("Staff", back_populates="attendance_records")
@@ -377,6 +436,10 @@ class Task(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     description: Mapped[str] = mapped_column(Text, nullable=False)
+    # REGULAR_DUTY / BANDOBAST / VIP_MOVEMENT / TRAFFIC_DUTY / VEHICLE_CHECKING / OTHERS (see services/task_categories.py).
+    # custom_title is the header typed for OTHERS. Tasks created before categories existed are OTHERS with no header.
+    category: Mapped[str] = mapped_column(String(30), default="OTHERS", server_default="OTHERS", nullable=False)
+    custom_title: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
     assignee_id: Mapped[int] = mapped_column(Integer, ForeignKey("staff.id"), nullable=False)
     reporting_officer_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("staff.id"), nullable=True)
     start_time: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)

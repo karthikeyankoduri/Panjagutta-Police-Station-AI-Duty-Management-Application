@@ -5,11 +5,11 @@ import AppShell from "@/components/AppShell";
 import { useAuth } from "@/lib/auth-context";
 import {
   getDuties, updateDuty, createDuty, getSectors, saveSector, getSections, saveSection,
-  getConfigLists, updateListItem, addListItem, formatApiError,
+  getConfigLists, updateListItem, addListItem, setDashboardCards, formatApiError,
   DutyItem, Sector, SectionItem, ListItem,
 } from "@/lib/api";
 
-type Tab = "duties" | "sectors" | "sections" | "lists";
+type Tab = "duties" | "sectors" | "sections" | "lists" | "cards";
 const DESIGNATIONS = ["INSPECTOR", "SI", "WSI", "ASI", "AWSI", "HC", "WHC", "PC", "WPC", "ARPC", "ARWPC", "HGS", "WHGS", "SPO"];
 const LIST_TITLES: Record<string, string> = {
   staff_status: "Staff statuses", leave_status: "Leave states", task_status: "Task states",
@@ -27,6 +27,8 @@ export default function ConfigPage() {
   const [newDuty, setNewDuty] = useState({ category: "", section: "", shift_code: "", required_strength: "" });
   const [newName, setNewName] = useState("");
   const [newCode, setNewCode] = useState("");
+  // Pending on/off choices for the dashboard KPI cards (saved together with one button).
+  const [cardChoice, setCardChoice] = useState<Record<string, boolean>>({});
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -34,6 +36,7 @@ export default function ConfigPage() {
       getDuties(token, { active_only: false }), getSectors(token), getSections(token), getConfigLists(token),
     ]);
     setDuties(d); setSectors(s); setSections(sec); setLists(l);
+    setCardChoice(Object.fromEntries((l.dashboard_card || []).map((c) => [c.code, c.is_active])));
   }, [token]);
 
   useEffect(() => { load(); }, [load]);
@@ -48,7 +51,7 @@ export default function ConfigPage() {
     }
   };
 
-  const tabs: [Tab, string][] = [["duties", "Duty requirements"], ["sectors", "Sectors"], ["sections", "Sections"], ["lists", "Status & state lists"]];
+  const tabs: [Tab, string][] = [["duties", "Duty requirements"], ["sectors", "Sectors"], ["sections", "Sections"], ["lists", "Status & state lists"], ["cards", "Dashboard cards"]];
 
   return (
     <AppShell>
@@ -213,7 +216,7 @@ export default function ConfigPage() {
           <div className="alert-banner alert-banner--info" style={{ marginBottom: 16 }}>
             Status codes drive the availability engine and cannot be renamed, but their labels, descriptions, order and visibility can be edited. New leave types can be added.
           </div>
-          {Object.entries(lists).map(([name, items]) => (
+          {Object.entries(lists).filter(([name]) => name !== "dashboard_card").map(([name, items]) => (
             <div className="card" key={name} style={{ marginBottom: 16 }}>
               <div className="card__header"><span className="card__title">{LIST_TITLES[name] || name}</span></div>
               <div className="card__body" style={{ padding: 0 }}>
@@ -244,6 +247,41 @@ export default function ConfigPage() {
           ))}
         </>
       )}
+
+      {tab === "cards" && (() => {
+        const cards = lists.dashboard_card || [];
+        const changed = cards.some((c) => cardChoice[c.code] !== c.is_active);
+        const shownCount = cards.filter((c) => cardChoice[c.code]).length;
+        return (
+          <div className="card">
+            <div className="card__header"><span className="card__title">Dashboard KPI cards ({shownCount} of {cards.length} shown)</span></div>
+            <div className="card__body">
+              <p className="text-muted" style={{ fontSize: 13, marginTop: 0 }}>
+                Switch a card off to hide it from the dashboard for everyone (web and Android). This only changes what
+                the dashboard displays; it does not change any records or who can access the data.
+              </p>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 10 }}>
+                {cards.map((c) => (
+                  <label key={c.code} className="card" style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", cursor: "pointer" }}>
+                    <input type="checkbox" checked={!!cardChoice[c.code]} aria-label={`Show ${c.label}`}
+                      onChange={(e) => setCardChoice({ ...cardChoice, [c.code]: e.target.checked })} />
+                    <span style={{ fontWeight: 600 }}>{c.label}</span>
+                    <span className="text-muted" style={{ marginLeft: "auto", fontSize: 11 }}>{cardChoice[c.code] ? "Shown" : "Hidden"}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div className="card__footer" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button className="btn btn-primary btn-sm" disabled={!changed}
+                onClick={() => run(() => setDashboardCards(token!, cardChoice), "Dashboard cards updated")}>Save changes</button>
+              <button className="btn btn-secondary btn-sm" disabled={!changed}
+                onClick={() => setCardChoice(Object.fromEntries(cards.map((c) => [c.code, c.is_active])))}>Discard</button>
+              <button className="btn btn-secondary btn-sm"
+                onClick={() => setCardChoice(Object.fromEntries(cards.map((c) => [c.code, true])))}>Show all</button>
+            </div>
+          </div>
+        );
+      })()}
     </AppShell>
   );
 }

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Reports and templates fetched from the API are staged here before the user opens or shares them. -->
+    <cache-path name="exports" path="exports/" />
+</paths>

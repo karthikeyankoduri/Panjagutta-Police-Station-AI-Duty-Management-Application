@@ -49,37 +49,48 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
-    private static final int NAVY = Color.rgb(15, 34, 56);
-    private static final int BLUE = Color.rgb(26, 86, 219);
-    private static final int GOLD = Color.rgb(201, 162, 39);
-    private static final int INK = Color.rgb(30, 41, 59);
-    private static final int MUTED = Color.rgb(100, 116, 139);
-    private static final int SURFACE = Color.WHITE;
-    private static final int BACKGROUND = Color.rgb(244, 246, 249);
-    private static final int LINE = Color.rgb(226, 232, 240);
-    private static final int GREEN = Color.rgb(22, 131, 78);
-    private static final int GREEN_BG = Color.rgb(228, 245, 235);
-    private static final int AMBER = Color.rgb(180, 110, 10);
-    private static final int AMBER_BG = Color.rgb(255, 244, 222);
-    private static final int RED = Color.rgb(192, 57, 43);
-    private static final int RED_BG = Color.rgb(253, 236, 234);
-    private static final int TINT = Color.rgb(233, 240, 254);
-    private static final int TINT_LINE = Color.rgb(207, 221, 250);
-    private static final String[] TAB_KEYS = {"Home", "Calendar", "Roster", "Attend", "Leave"};
-    private static final String[] TAB_LABELS = {"Home", "Calendar", "Roster", "Attendance", "Requests"};
+    static final int NAVY = Color.rgb(15, 34, 56);
+    static final int BLUE = Color.rgb(26, 86, 219);
+    static final int GOLD = Color.rgb(201, 162, 39);
+    static final int INK = Color.rgb(30, 41, 59);
+    static final int MUTED = Color.rgb(100, 116, 139);
+    static final int SURFACE = Color.WHITE;
+    static final int BACKGROUND = Color.rgb(244, 246, 249);
+    static final int LINE = Color.rgb(226, 232, 240);
+    static final int GREEN = Color.rgb(22, 131, 78);
+    static final int GREEN_BG = Color.rgb(228, 245, 235);
+    static final int AMBER = Color.rgb(180, 110, 10);
+    static final int AMBER_BG = Color.rgb(255, 244, 222);
+    static final int RED = Color.rgb(192, 57, 43);
+    static final int RED_BG = Color.rgb(253, 236, 234);
+    static final int TINT = Color.rgb(233, 240, 254);
+    static final int TINT_LINE = Color.rgb(207, 221, 250);
+    // Personal self-service tabs (STAFF role). Other roles get a module-based bar, see buildNavigation().
+    private static final String[] STAFF_TAB_KEYS = {"Home", "Calendar", "Roster", "Attend", "Leave"};
+    private static final String[] STAFF_TAB_LABELS = {"Home", "Calendar", "Roster", "Attendance", "Requests"};
+    private static final int[] STAFF_TAB_ICONS = {R.drawable.ic_home, R.drawable.ic_calendar,
+            R.drawable.ic_roster, R.drawable.ic_attendance, R.drawable.ic_leave};
     private static final String NOTIFY_CHANNEL = "duty_updates";
     private static final long POLL_MS = 60_000L;
-    private static final int[] TAB_ICONS = {R.drawable.ic_home, R.drawable.ic_calendar,
-            R.drawable.ic_roster, R.drawable.ic_attendance, R.drawable.ic_leave};
+    /** Prefix of tab keys that open a role-based module, e.g. "m:roster". "m:more" is the menu. */
+    static final String MODULE_PREFIX = "m:";
+    static final String MORE = "more";
+    private String[] TAB_KEYS = STAFF_TAB_KEYS;
+    private String[] TAB_LABELS = STAFF_TAB_LABELS;
+    private int[] TAB_ICONS = STAFF_TAB_ICONS;
+    ModuleScreen current;
+    /** Set by the Roster screen to open Duty Allocation on a particular draft. */
+    String allocationDate;
+    String allocationShift;
     private static final String DEFAULT_API_BASE = BuildConfig.API_BASE_URL;
 
-    private final ExecutorService executor = Executors.newSingleThreadExecutor();
-    private final Handler mainHandler = new Handler(Looper.getMainLooper());
-    private String apiBase;
-    private String token;
-    private JSONObject profile;
+    final ExecutorService executor = Executors.newSingleThreadExecutor();
+    final Handler mainHandler = new Handler(Looper.getMainLooper());
+    String apiBase;
+    String token;
+    JSONObject profile;
     private LinearLayout page;
-    private LinearLayout content;
+    LinearLayout content;
     private EditText serverInput;
     private EditText usernameInput;
     private EditText passwordInput;
@@ -87,16 +98,17 @@ public class MainActivity extends Activity {
     private EditText leaveStart;
     private EditText leaveEnd;
     private LinearLayout leaveHistory;
-    private String selectedTab = "Home";
+    String selectedTab = "Home";
     private JSONArray rosterData = new JSONArray();
     private JSONArray attendanceData = new JSONArray();
+    private JSONArray signInData = new JSONArray(); // today's own sign-ins, including ones with no rostered shift
     private JSONArray leaveData = new JSONArray();
     private Calendar visibleMonth = Calendar.getInstance();
     private String selectedCalendarDate;
     private SwipeRefreshLayout swipeRefresh;
     private JSONArray calendarData = new JSONArray();
     private final java.util.Set<String> loaded = new java.util.HashSet<>();
-    private final LinearLayout[] navItems = new LinearLayout[TAB_KEYS.length];
+    private LinearLayout[] navItems = new LinearLayout[STAFF_TAB_KEYS.length];
     private android.animation.ObjectAnimator skeletonAnimator;
     private int insetTop;
     private int insetBottom;
@@ -105,7 +117,7 @@ public class MainActivity extends Activity {
     private JSONArray movementData = new JSONArray();
     private JSONObject historyData;
     private JSONArray notificationData = new JSONArray();
-    private int unreadCount;
+    int unreadCount;
     private TextView bellBadge;
     private String requestMode = "leave";
     private EditText movementPurpose;
@@ -150,6 +162,7 @@ public class MainActivity extends Activity {
 
     /** Branded loading screen shown while a saved session is restored. */
     private void showSplash() {
+        workspaceShown = false;
         LinearLayout splash = new LinearLayout(this);
         splash.setOrientation(LinearLayout.VERTICAL);
         splash.setGravity(Gravity.CENTER);
@@ -229,6 +242,8 @@ public class MainActivity extends Activity {
     }
 
     private void showLogin() {
+        workspaceShown = false;
+        current = null;
         page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL);
         page.setGravity(Gravity.CENTER);
@@ -405,8 +420,7 @@ public class MainActivity extends Activity {
                         mainHandler.post(() -> showChangePassword(typedPassword, true));
                         return;
                     }
-                    JSONObject staffProfile = request("/mobile/me", "GET", null, false);
-                    profile = staffProfile;
+                    profile = loadProfile();
                     mainHandler.post(this::enterWorkspace);
                 } catch (Exception exception) {
                     token = null;
@@ -435,7 +449,7 @@ public class MainActivity extends Activity {
     private void fetchProfile() {
         executor.execute(() -> {
             try {
-                JSONObject me = request("/mobile/me", "GET", null, false);
+                JSONObject me = loadProfile();
                 if (me.optBoolean("must_change_password", false)) {
                     mainHandler.post(() -> showChangePassword("", true));
                     return;
@@ -453,7 +467,132 @@ public class MainActivity extends Activity {
         });
     }
 
+    /**
+     * Signed-in user's profile. Starts from /auth/me (works for every role) and, when the login is
+     * linked to a staff record, adds that record's details from /mobile/me.
+     */
+    private JSONObject loadProfile() throws Exception {
+        JSONObject me = request("/auth/me", "GET", null, false);
+        JSONObject merged = new JSONObject();
+        if (!me.isNull("staff_id") && me.optInt("staff_id", 0) > 0) {
+            try {
+                JSONObject staff = request("/mobile/me", "GET", null, false);
+                java.util.Iterator<String> keys = staff.keys();
+                while (keys.hasNext()) {
+                    String key = keys.next();
+                    merged.put(key, staff.get(key));
+                }
+            } catch (IllegalStateException ignored) {
+                // Role-only account or unlinked staff record: the /auth/me fields below are enough.
+            }
+        }
+        java.util.Iterator<String> keys = me.keys();
+        while (keys.hasNext()) {
+            String key = keys.next();
+            merged.put(key, me.get(key));
+        }
+        String role = RoleAccess.normalize(me.optString("role", "STAFF"));
+        merged.put("role", role);
+        if (merged.optString("name", "").trim().isEmpty() || merged.isNull("name")) {
+            String staffName = me.isNull("staff_name") ? "" : me.optString("staff_name", "");
+            merged.put("name", staffName.isEmpty() ? me.optString("username", "User") : staffName);
+        }
+        if (merged.optString("designation", "").trim().isEmpty() || merged.isNull("designation")) {
+            merged.put("designation", RoleAccess.roleLabel(role));
+        }
+        return merged;
+    }
+
+    String role() {
+        return profile == null ? RoleAccess.STAFF : RoleAccess.normalize(profile.optString("role", RoleAccess.STAFF));
+    }
+
+    boolean isStaffRole() {
+        return RoleAccess.isStaff(role());
+    }
+
+    private String landingTab() {
+        return isStaffRole() ? "Home" : MODULE_PREFIX + RoleAccess.DASHBOARD;
+    }
+
+    /** Chooses the bottom bar for the signed-in role (see RoleAccess / web AppShell). */
+    private void buildNavigation() {
+        if (isStaffRole()) {
+            TAB_KEYS = STAFF_TAB_KEYS;
+            TAB_LABELS = STAFF_TAB_LABELS;
+            TAB_ICONS = STAFF_TAB_ICONS;
+        } else {
+            java.util.List<String> bottom = RoleAccess.bottomModules(role());
+            int n = bottom.size() + 1;
+            TAB_KEYS = new String[n];
+            TAB_LABELS = new String[n];
+            TAB_ICONS = new int[n];
+            for (int i = 0; i < bottom.size(); i++) {
+                String module = bottom.get(i);
+                TAB_KEYS[i] = MODULE_PREFIX + module;
+                TAB_LABELS[i] = RoleAccess.ROSTER.equals(module) ? "Roster"
+                        : RoleAccess.APPROVALS.equals(module) ? "Approvals" : RoleAccess.label(module);
+                TAB_ICONS[i] = iconFor(module);
+            }
+            TAB_KEYS[n - 1] = MODULE_PREFIX + MORE;
+            TAB_LABELS[n - 1] = "More";
+            TAB_ICONS[n - 1] = R.drawable.ic_more;
+        }
+        navItems = new LinearLayout[TAB_KEYS.length];
+    }
+
+    static int iconFor(String module) {
+        switch (module) {
+            case RoleAccess.DASHBOARD: return R.drawable.ic_dashboard;
+            case RoleAccess.ROSTER: return R.drawable.ic_roster;
+            case RoleAccess.ALLOCATION: return R.drawable.ic_roster;
+            case RoleAccess.APPROVALS: return R.drawable.ic_approvals;
+            case RoleAccess.ATTENDANCE: return R.drawable.ic_attendance;
+            case RoleAccess.LEAVE: return R.drawable.ic_leave;
+            case RoleAccess.MOVEMENTS: return R.drawable.ic_pin;
+            case RoleAccess.TASKS: return R.drawable.ic_clock;
+            case RoleAccess.STAFF_REGISTER: return R.drawable.ic_people;
+            default: return R.drawable.ic_more;
+        }
+    }
+
+    /** Opens a role module (e.g. from the More menu, a notification or a cross-link). */
+    void openModule(String module) {
+        if (!MORE.equals(module) && !RoleAccess.canSee(module, role())) {
+            toast("Your role does not have access to " + RoleAccess.label(module) + ".");
+            return;
+        }
+        selectTab(MODULE_PREFIX + module);
+    }
+
+    private boolean workspaceShown;
+
+    @Override
+    public void onBackPressed() {
+        if (workspaceShown && token != null && profile != null) {
+            if (current != null && current.back()) return;
+            String landing = landingTab();
+            if (!landing.equals(selectedTab)) {
+                selectTab(landing);
+                return;
+            }
+        }
+        super.onBackPressed();
+    }
+
+    private void openModuleScreen(String module) {
+        content.removeAllViews();
+        current = Modules.create(module, this);
+        if (current == null) {
+            showError("This screen is not available in the app yet.");
+            return;
+        }
+        current.show();
+    }
+
     private void renderWorkspace() {
+        buildNavigation();
+        workspaceShown = true;
         page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL);
         page.setBackgroundColor(BACKGROUND);
@@ -573,9 +712,14 @@ public class MainActivity extends Activity {
 
     /** Highlights the active bottom-nav item; Profile (opened from the avatar) highlights none. */
     private void updateNav() {
+        // A module reached from the More menu keeps "More" highlighted.
+        String highlight = selectedTab;
+        boolean onBar = false;
+        for (String k : TAB_KEYS) if (k.equals(selectedTab)) onBar = true;
+        if (!onBar && selectedTab.startsWith(MODULE_PREFIX)) highlight = MODULE_PREFIX + MORE;
         for (int i = 0; i < TAB_KEYS.length; i++) {
             if (navItems[i] == null) continue;
-            boolean selected = TAB_KEYS[i].equals(selectedTab);
+            boolean selected = TAB_KEYS[i].equals(highlight);
             ImageView icon = (ImageView) navItems[i].getChildAt(0);
             TextView label = (TextView) navItems[i].getChildAt(1);
             icon.setColorFilter(selected ? BLUE : MUTED);
@@ -585,7 +729,7 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void stopRefreshing() {
+    void stopRefreshing() {
         if (swipeRefresh != null) swipeRefresh.setRefreshing(false);
     }
 
@@ -613,21 +757,45 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void selectTab(String tab) {
+    void selectTab(String tab) {
         selectedTab = tab;
         updateNav();
+        if (tab.startsWith(MODULE_PREFIX)) {
+            openModuleScreen(tab.substring(MODULE_PREFIX.length()));
+            fadeIn();
+            return;
+        }
+        current = null;
         boolean cached = "Profile".equals(tab) || loaded.contains(tab);
         if (cached) renderTab(tab);
         fadeIn();
         if (!"Profile".equals(tab)) refreshData();
     }
 
-    private void refreshData() {
+    void refreshData() {
         if (token == null) return;
         final String tab = selectedTab;
+        if (tab.startsWith(MODULE_PREFIX)) {
+            if (current != null) current.show();
+            else stopRefreshing();
+            return;
+        }
         if ("Profile".equals(tab)) {
-            stopRefreshing();
-            renderTab(tab);
+            renderTab(tab); // show what we have straight away, then replace it with the current record
+            executor.execute(() -> {
+                try {
+                    final JSONObject fresh = loadProfile();
+                    mainHandler.post(() -> {
+                        stopRefreshing();
+                        if (token != null && "Profile".equals(selectedTab)) {
+                            profile = fresh;
+                            renderTab("Profile");
+                        }
+                    });
+                } catch (Exception e) {
+                    mainHandler.post(this::stopRefreshing); // keep the cached details
+                }
+            });
             return;
         }
         final boolean cached = loaded.contains(tab);
@@ -651,6 +819,7 @@ public class MainActivity extends Activity {
                     case "Attend":
                         result[0] = requestArray("/mobile/attendance?attendance_date=" + today());
                         result[1] = request("/mobile/attendance/history", "GET", null, false);
+                        result[2] = requestArray("/attendance/?attendance_date=" + today());
                         break;
                     case "Alerts":
                         result[0] = request("/notifications/?limit=50", "GET", null, false);
@@ -674,6 +843,7 @@ public class MainActivity extends Activity {
                         case "Attend":
                             attendanceData = (JSONArray) result[0];
                             historyData = (JSONObject) result[1];
+                            signInData = (JSONArray) result[2];
                             break;
                         case "Alerts": applyNotifications((JSONObject) result[0], false); break;
                         default:
@@ -733,8 +903,8 @@ public class MainActivity extends Activity {
         JSONObject todayRoster = findTodayRoster();
         JSONObject todayAttendance = findTodayAttendance(todayRoster);
         LinearLayout todayCard = card(todayRoster == null ? MUTED
-                : "VERIFIED".equals(attendanceStatus(todayAttendance)) ? GREEN
-                : "NOT SUBMITTED".equals(attendanceStatus(todayAttendance)) ? BLUE : AMBER);
+                : "SIGNED IN".equals(attendanceStatus(todayAttendance)) || "PRESENT".equals(attendanceStatus(todayAttendance)) ? GREEN
+                : "NOT SIGNED IN".equals(attendanceStatus(todayAttendance)) ? BLUE : AMBER);
         LinearLayout todayHeading = new LinearLayout(this);
         todayHeading.setGravity(Gravity.CENTER_VERTICAL);
         todayHeading.addView(text("TODAY'S DUTY", 10, BLUE, true),
@@ -845,23 +1015,53 @@ public class MainActivity extends Activity {
         TextView name = text(displayName, 19, INK, true);
         name.setGravity(Gravity.CENTER);
         identityCard.addView(name);
-        TextView role = text(profile.optString("designation", "STAFF") + "  ·  "
-                + profile.optString("service_number"), 12, BLUE, true);
+        String serviceNo = profile.isNull("service_number") ? "" : profile.optString("service_number", "");
+        TextView role = text(RoleAccess.roleLabel(role()) + (serviceNo.isEmpty() ? "" : "  ·  " + serviceNo),
+                12, BLUE, true);
         role.setGravity(Gravity.CENTER);
         identityCard.addView(role);
         content.addView(identityCard, cardParams());
 
         LinearLayout details = card();
-        details.addView(text("STAFF DETAILS", 10, BLUE, true));
+        details.addView(text(isStaffRole() ? "STAFF DETAILS" : "ACCOUNT DETAILS", 10, BLUE, true));
         addProfileDetail(details, "Full name", displayName);
-        addProfileDetail(details, "Service number",
-                profile.optString("service_number", "Not available"));
-        addProfileDetail(details, "Designation",
-                profile.optString("designation", "Staff"));
-        String sector = profile.isNull("sector")
-                ? "Station-wide" : profile.optString("sector");
+        addProfileDetail(details, "Role", RoleAccess.roleLabel(role()));
+        if (!serviceNo.isEmpty()) addProfileDetail(details, "Service number", serviceNo);
+        if (!profile.isNull("designation")) {
+            addProfileDetail(details, "Designation", profile.optString("designation", ""));
+        }
+        if (!profile.isNull("category")) {
+            addProfileDetail(details, "Category", profile.optString("category", "").replace('_', ' '));
+        }
+        String sector = !profile.isNull("sector_name") ? profile.optString("sector_name")
+                : profile.isNull("sector")
+                ? (profile.isNull("sector_id") ? "Station-wide" : "Sector " + profile.optString("sector_id"))
+                : profile.optString("sector");
         addProfileDetail(details, "Sector", sector);
-        addProfileDetail(details, "Account", profile.optString("username", "Staff mobile account"));
+        if (!profile.isNull("section") && !profile.optString("section", "").isEmpty()) {
+            addProfileDetail(details, "Section", profile.optString("section"));
+        }
+        if (!profile.isNull("contact_phone") && !profile.optString("contact_phone", "").isEmpty()) {
+            addProfileDetail(details, "Phone", profile.optString("contact_phone"));
+        }
+        if (!profile.isNull("reporting_officer")) {
+            addProfileDetail(details, "Reporting officer", profile.optString("reporting_officer"));
+        }
+        if (!profile.isNull("date_of_joining")) {
+            addProfileDetail(details, "Joined", formatDate(profile.optString("date_of_joining")));
+        }
+        addProfileDetail(details, "Username", profile.optString("username", "Mobile account"));
+        if (!profile.isNull("email") && !profile.optString("email", "").isEmpty()) {
+            addProfileDetail(details, "Email", profile.optString("email"));
+        }
+        if (!profile.isNull("last_login")) {
+            String last = profile.optString("last_login");
+            addProfileDetail(details, "Last sign-in", formatDate(last) + " " + formatTime(last));
+        }
+        addProfileDetail(details, "Account status", profile.optBoolean("is_active", true) ? "Active" : "Inactive");
+        if (profile.optInt("session_timeout_minutes", 0) > 0) {
+            addProfileDetail(details, "Session timeout", profile.optInt("session_timeout_minutes") + " min of inactivity");
+        }
         content.addView(details, cardParams());
 
         LinearLayout connection = card();
@@ -871,6 +1071,12 @@ public class MainActivity extends Activity {
                 apiBase.regionMatches(true, 0, "https://", 0, 8)
                         ? "Secure HTTPS" : "Local development HTTP");
         content.addView(connection, cardParams());
+
+        Button guide = button("Workflow guide", GREEN);
+        LinearLayout.LayoutParams guideParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48));
+        guideParams.bottomMargin = dp(10);
+        content.addView(guide, guideParams);
+        guide.setOnClickListener(v -> openModule(RoleAccess.GUIDE));
 
         Button changePw = button("Change password", BLUE);
         LinearLayout.LayoutParams changeParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48));
@@ -886,7 +1092,7 @@ public class MainActivity extends Activity {
         logout.setOnClickListener(v -> confirmSignOut());
     }
 
-    private void addProfileDetail(LinearLayout card, String label, String value) {
+    void addProfileDetail(LinearLayout card, String label, String value) {
         TextView labelView = text(label, 10, MUTED, false);
         labelView.setPadding(0, dp(8), 0, 0);
         card.addView(labelView);
@@ -906,12 +1112,12 @@ public class MainActivity extends Activity {
                 .show();
     }
 
-    private void signOut() {
+    void signOut() {
         signOut(null);
     }
 
     /** Ends the session on the server (token invalidated) and locally; `notice` explains why. */
-    private void signOut(String notice) {
+    void signOut(String notice) {
         final String oldToken = token;
         if (oldToken != null) {
             executor.execute(() -> logoutOnServer(oldToken));
@@ -926,6 +1132,8 @@ public class MainActivity extends Activity {
         unreadCount = 0;
         calendarData = new JSONArray();
         selectedTab = "Home";
+        current = null;
+        workspaceShown = false;
         token = null;
         profile = null;
         rosterData = new JSONArray();
@@ -1100,7 +1308,7 @@ public class MainActivity extends Activity {
                 addDutyDiaryAttendance(dutyCard, attendance);
             } else {
                 dutyCard.addView(text("ATTENDANCE", 9, MUTED, true));
-                dutyCard.addView(text("Attendance can be recorded on the duty date.",
+                dutyCard.addView(text("Attendance is recorded automatically when you sign in during the shift.",
                         12, MUTED, false));
             }
             content.addView(dutyCard, cardParams());
@@ -1156,69 +1364,68 @@ public class MainActivity extends Activity {
         }
     }
 
+    /** Attendance is recorded automatically at sign-in, so there is nothing to press: just show the state. */
     private void addDashboardAttendance(LinearLayout card, JSONObject attendance,
                                         JSONObject roster) {
-        String submittedAt = attendance == null ? "" : attendance.optString("attendance_submitted_at", "");
-        boolean submitted = !submittedAt.isEmpty() && !"null".equals(submittedAt);
-        if (submitted) {
-            addAttendanceStatus(card, attendance);
-            return;
-        }
-        Button attendanceAction = button("Submit attendance", BLUE);
-        LinearLayout.LayoutParams actionParams = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(46));
-        actionParams.topMargin = dp(8);
-        card.addView(attendanceAction, actionParams);
-        attendanceAction.setOnClickListener(v ->
-                postAttendance(roster.optInt("roster_id"), attendanceAction));
-    }
-
-    private void addDutyDiaryAttendance(LinearLayout card, JSONObject attendance) {
-        card.addView(text("ATTENDANCE RECORD", 9, MUTED, true));
-        if (attendance == null) {
-            card.addView(text("No attendance submission was found for this shift.", 12, MUTED, false));
+        if (attendance == null || attendanceStatus(attendance).equals("NOT SIGNED IN")) {
+            card.addView(text("ATTENDANCE", 9, MUTED, true));
+            card.addView(text("Not signed in for this shift yet. Attendance is recorded when you sign in during the shift.",
+                    12, MUTED, false));
             return;
         }
         addAttendanceStatus(card, attendance);
     }
 
-    private void addAttendanceStatus(LinearLayout card, JSONObject attendance) {
-        String submittedAt = attendance.optString("attendance_submitted_at", "");
-        boolean submitted = !submittedAt.isEmpty() && !"null".equals(submittedAt);
-        if (submitted) {
-            card.addView(text("Submitted " + formatTime(submittedAt), 12, INK, true));
+    private void addDutyDiaryAttendance(LinearLayout card, JSONObject attendance) {
+        card.addView(text("ATTENDANCE RECORD", 9, MUTED, true));
+        if (attendance == null || attendanceStatus(attendance).equals("NOT SIGNED IN")) {
+            card.addView(text("No sign-in was recorded for this shift.", 12, MUTED, false));
+            return;
         }
-        boolean confirmed = attendance.optBoolean("attendance_confirmed", false);
-        if (confirmed) {
-            String verifiedAt = attendance.optString("attendance_verified_at", "");
-            if (!verifiedAt.isEmpty() && !"null".equals(verifiedAt)) {
-                card.addView(text("Verified " + formatTime(verifiedAt), 12, MUTED, false));
-            }
-        }
-        card.addView(statusBadge(
-                confirmed ? "VERIFIED" : submitted ? "AWAITING VERIFICATION" : "NOT SUBMITTED",
-                confirmed ? GREEN : BLUE,
-                confirmed ? GREEN_BG : TINT));
+        addAttendanceStatus(card, attendance);
     }
 
+    private static boolean has(JSONObject o, String key) {
+        String v = o == null ? "" : o.optString(key, "");
+        return !v.isEmpty() && !"null".equals(v);
+    }
+
+    private void addAttendanceStatus(LinearLayout card, JSONObject attendance) {
+        String status = attendanceStatus(attendance);
+        if (has(attendance, "check_in_at")) {
+            card.addView(text("Signed in " + formatTime(attendance.optString("check_in_at")), 12, INK, true));
+            if (has(attendance, "check_out_at")) {
+                card.addView(text("Signed out " + formatTime(attendance.optString("check_out_at")), 12, MUTED, false));
+            } else {
+                card.addView(text("Still signed in", 12, MUTED, false));
+            }
+        }
+        card.addView(statusBadge(status, attendanceStatusColor(attendance), attendanceStatusBackground(attendance)));
+    }
+
+    /** SIGNED IN, LATE, UNSCHEDULED (signed in but not rostered), PRESENT (older supervisor-marked record) or NOT SIGNED IN. */
     private String attendanceStatus(JSONObject attendance) {
-        if (attendance == null) return "NOT SUBMITTED";
-        String submittedAt = attendance.optString("attendance_submitted_at", "");
-        if (submittedAt.isEmpty() || "null".equals(submittedAt)) return "NOT SUBMITTED";
-        return attendance.optBoolean("attendance_confirmed", false)
-                ? "VERIFIED" : "AWAITING VERIFICATION";
+        if (attendance == null) return "NOT SIGNED IN";
+        boolean confirmed = attendance.optBoolean("attendance_confirmed", false);
+        if (has(attendance, "check_in_at")) {
+            if (!confirmed) return "UNSCHEDULED";
+            return attendance.optBoolean("is_late", false) ? "LATE" : "SIGNED IN";
+        }
+        return confirmed ? "PRESENT" : "NOT SIGNED IN";
     }
 
     private int attendanceStatusColor(JSONObject attendance) {
         String status = attendanceStatus(attendance);
-        return "VERIFIED".equals(status)
-                ? GREEN : AMBER;
+        if ("SIGNED IN".equals(status) || "PRESENT".equals(status)) return GREEN;
+        if ("NOT SIGNED IN".equals(status)) return MUTED;
+        return AMBER;
     }
 
     private int attendanceStatusBackground(JSONObject attendance) {
         String status = attendanceStatus(attendance);
-        return "VERIFIED".equals(status)
-                ? GREEN_BG : AMBER_BG;
+        if ("SIGNED IN".equals(status) || "PRESENT".equals(status)) return GREEN_BG;
+        if ("NOT SIGNED IN".equals(status)) return BACKGROUND;
+        return AMBER_BG;
     }
 
     private JSONObject findTodayRoster() {
@@ -1293,9 +1500,10 @@ public class MainActivity extends Activity {
 
     private void showAttendance() {
         content.removeAllViews();
-        addPageHeading("ATTENDANCE", "Today’s attendance", "Submit attendance for today's assigned published duty. An officer will verify it.");
+        addPageHeading("ATTENDANCE", "Today’s attendance", "Attendance is recorded automatically when you sign in during your shift and when you sign out. There is nothing to submit.");
+        addTodaySignIns();
         if (attendanceData.length() == 0) {
-            content.addView(cardMessage("There is no published shift assigned to you today."));
+            if (signInData.length() == 0) content.addView(cardMessage("There is no published shift assigned to you today."));
             addAttendanceHistory();
             return;
         }
@@ -1311,17 +1519,7 @@ public class MainActivity extends Activity {
             card.addView(text(item.optString("start_time") + " – " + item.optString("end_time"),
                     13, MUTED, false));
             addDivider(card);
-            String submittedAt = item.optString("attendance_submitted_at", "");
-            boolean submitted = !submittedAt.isEmpty() && !"null".equals(submittedAt);
-            if (submitted) {
-                addAttendanceStatus(card, item);
-            } else {
-                Button mark = button("Submit attendance", BLUE);
-                LinearLayout.LayoutParams markParams = fieldParams();
-                markParams.topMargin = dp(12);
-                card.addView(mark, markParams);
-                mark.setOnClickListener(v -> postAttendance(item.optInt("roster_id"), mark));
-            }
+            addDashboardAttendance(card, item, item);
             content.addView(card, cardParams());
         }
         addAttendanceHistory();
@@ -1426,32 +1624,8 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void postAttendance(int rosterId, Button button) {
-        button.setEnabled(false);
-        executor.execute(() -> {
-            try {
-                JSONObject body = new JSONObject();
-                body.put("roster_id", rosterId);
-                request("/mobile/attendance", "POST", body, false);
-                mainHandler.post(() -> {
-                    toast("Attendance submitted for officer verification");
-                    loaded.remove("Home");
-                    loaded.remove("Attend");
-                    loaded.remove("Calendar");
-                    refreshData();
-                });
-            } catch (Exception exception) {
-                String message = exception.getMessage() == null ? "Unable to record attendance." : exception.getMessage();
-                mainHandler.post(() -> {
-                    button.setEnabled(true);
-                    toast(message);
-                });
-            }
-        });
-    }
-
     /** Read-only field that opens a calendar picker instead of asking staff to type YYYY-MM-DD. */
-    private EditText dateField(String initial, EditText minimumFrom) {
+    EditText dateField(String initial, EditText minimumFrom) {
         EditText field = input("Select date", InputType.TYPE_NULL);
         field.setText(initial);
         field.setFocusable(false);
@@ -1460,11 +1634,15 @@ public class MainActivity extends Activity {
         android.graphics.drawable.Drawable icon = getDrawable(R.drawable.ic_calendar).mutate();
         icon.setTint(BLUE);
         field.setCompoundDrawablesRelativeWithIntrinsicBounds(null, null, icon, null);
-        if (minimumFrom != null) field.setOnClickListener(v -> pickDate(field, minimumFrom, null));
+        field.setOnClickListener(v -> pickDate(field, minimumFrom, null));
+        field.setOnLongClickListener(v -> {
+            field.setText(""); // lets optional dates be cleared
+            return true;
+        });
         return field;
     }
 
-    private void pickDate(EditText target, EditText minimumFrom, EditText pushForward) {
+    void pickDate(EditText target, EditText minimumFrom, EditText pushForward) {
         Calendar current = parseCalendarDate(target.getText().toString());
         if (current == null) current = Calendar.getInstance();
         android.app.DatePickerDialog dialog = new android.app.DatePickerDialog(this,
@@ -1535,12 +1713,12 @@ public class MainActivity extends Activity {
                 : "Rejected".equalsIgnoreCase(status) ? RED : AMBER;
     }
 
-    private String greeting() {
+    String greeting() {
         int hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY);
         return hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
     }
 
-    private void sectionHeader(String title, String actionLabel, Runnable action) {
+    void sectionHeader(String title, String actionLabel, Runnable action) {
         LinearLayout row = new LinearLayout(this);
         row.setGravity(Gravity.CENTER_VERTICAL);
         TextView heading = text(title, 10, MUTED, true);
@@ -1558,7 +1736,7 @@ public class MainActivity extends Activity {
         content.addView(row, lp);
     }
 
-    private void addPageHeading(String eyebrow, String title, String subtitle) {
+    void addPageHeading(String eyebrow, String title, String subtitle) {
         TextView section = text(eyebrow, 9, BLUE, true);
         section.setLetterSpacing(0.08f);
         content.addView(section);
@@ -1570,13 +1748,13 @@ public class MainActivity extends Activity {
         content.addView(description);
     }
 
-    private void addFieldLabel(LinearLayout parent, String label) {
+    void addFieldLabel(LinearLayout parent, String label) {
         TextView view = text(label, 11, INK, true);
         view.setPadding(dp(2), dp(3), dp(2), dp(2));
         parent.addView(view);
     }
 
-    private TextView statusBadge(String label, int foreground, int background) {
+    TextView statusBadge(String label, int foreground, int background) {
         TextView badge = text(label, 9, foreground, true);
         badge.setGravity(Gravity.CENTER);
         badge.setPadding(dp(9), dp(5), dp(9), dp(5));
@@ -1584,7 +1762,7 @@ public class MainActivity extends Activity {
         return badge;
     }
 
-    private void addDivider(LinearLayout parent) {
+    void addDivider(LinearLayout parent) {
         View divider = new View(this);
         divider.setBackgroundColor(LINE);
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
@@ -1594,7 +1772,7 @@ public class MainActivity extends Activity {
     }
 
     /** Shimmering placeholder cards shown while a tab loads for the first time. */
-    private void addSkeleton() {
+    void addSkeleton() {
         stopSkeleton();
         content.removeAllViews();
         LinearLayout skeleton = new LinearLayout(this);
@@ -1617,14 +1795,18 @@ public class MainActivity extends Activity {
         skeletonAnimator.start();
     }
 
-    private void stopSkeleton() {
+    void stopSkeleton() {
         if (skeletonAnimator != null) {
             skeletonAnimator.cancel();
             skeletonAnimator = null;
         }
     }
 
-    private void showError(String message) {
+    void showError(String message) {
+        showErrorWith(message, this::refreshData);
+    }
+
+    void showErrorWith(String message, Runnable retryAction) {
         stopSkeleton();
         content.removeAllViews();
         LinearLayout box = card(RED);
@@ -1634,16 +1816,16 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams rp = fieldParams();
         rp.topMargin = dp(10);
         box.addView(retry, rp);
-        retry.setOnClickListener(v -> refreshData());
+        retry.setOnClickListener(v -> retryAction.run());
         content.addView(box, cardParams());
     }
 
-    private JSONArray requestArray(String path) throws Exception {
+    JSONArray requestArray(String path) throws Exception {
         String body = requestText(path, "GET", null, false);
         return new JSONArray(body);
     }
 
-    private JSONObject request(String path, String method, JSONObject body, boolean form) throws Exception {
+    JSONObject request(String path, String method, JSONObject body, boolean form) throws Exception {
         String response = requestText(path, method, body, form);
         return response.isEmpty() ? new JSONObject() : new JSONObject(response);
     }
@@ -1668,14 +1850,14 @@ public class MainActivity extends Activity {
         return "Cannot reach " + base + ". Check the internet connection, confirm this is the approved HTTPS API URL, and ask IT to verify the API service is running.";
     }
 
-    private String apiUrl(String path) {
+    String apiUrl(String path) {
         String base = apiBase.replaceAll("/+$", "");
         String apiPrefix = base.endsWith("/api") ? "" : "/api";
         String route = path.startsWith("/") ? path : "/" + path;
         return base + apiPrefix + route;
     }
 
-    private String requestText(String path, String method, JSONObject body, boolean form) throws Exception {
+    String requestText(String path, String method, JSONObject body, boolean form) throws Exception {
         HttpURLConnection connection = (HttpURLConnection) new URL(apiUrl(path)).openConnection();
         connection.setRequestMethod(method);
         connection.setConnectTimeout(12000);
@@ -1722,15 +1904,175 @@ public class MainActivity extends Activity {
             throw new IllegalStateException("Password change required");
         }
         if (status < 200 || status >= 300) {
+            String message = null;
             try {
-                String detail = new JSONObject(result).optString("detail");
-                if (!detail.isEmpty()) throw new IllegalStateException(detail);
+                message = describeDetail(new JSONObject(result).opt("detail"));
             } catch (JSONException ignored) {
-                if (result.trim().isEmpty()) throw new IllegalStateException("The API returned HTTP " + status + ".");
+                // Not a JSON error body.
             }
+            if (message != null && !message.isEmpty()) throw new IllegalStateException(message);
+            if (result.trim().isEmpty()) throw new IllegalStateException("The API returned HTTP " + status + ".");
             throw new IllegalStateException("Request failed (HTTP " + status + ").");
         }
         return result;
+    }
+
+    /** Turns FastAPI's `detail` (string, validation list or structured object) into readable text. */
+    static String describeDetail(Object detail) {
+        if (detail == null || detail == JSONObject.NULL) return null;
+        if (detail instanceof String) return (String) detail;
+        if (detail instanceof JSONArray) {
+            JSONArray list = (JSONArray) detail;
+            StringBuilder out = new StringBuilder();
+            for (int i = 0; i < list.length(); i++) {
+                Object item = list.opt(i);
+                String line;
+                if (item instanceof JSONObject) {
+                    JSONObject o = (JSONObject) item;
+                    line = o.optString("msg", o.optString("message", o.toString()));
+                    JSONArray loc = o.optJSONArray("loc");
+                    if (loc != null && loc.length() > 0) {
+                        String field = String.valueOf(loc.opt(loc.length() - 1));
+                        if (!"body".equals(field)) line = field + ": " + line;
+                    }
+                } else {
+                    line = String.valueOf(item);
+                }
+                if (out.length() > 0) out.append("; ");
+                out.append(line);
+            }
+            return out.toString();
+        }
+        if (detail instanceof JSONObject) {
+            JSONObject o = (JSONObject) detail;
+            String message = o.optString("message", o.optString("msg", ""));
+            return message.isEmpty() ? o.toString() : message;
+        }
+        return String.valueOf(detail);
+    }
+
+    /** A file fetched from an authenticated endpoint. */
+    static final class Download {
+        byte[] data;
+        String name;
+        String type;
+    }
+
+    /** GET a binary response (report export, CSV template) with the session token. */
+    Download download(String path, String fallbackName) throws Exception {
+        HttpURLConnection connection = (HttpURLConnection) new URL(apiUrl(path)).openConnection();
+        connection.setRequestMethod("GET");
+        connection.setConnectTimeout(12000);
+        connection.setReadTimeout(60000);
+        if (token != null) connection.setRequestProperty("Authorization", "Bearer " + token);
+        int status = connection.getResponseCode();
+        InputStream stream = status >= 400 ? connection.getErrorStream() : connection.getInputStream();
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        if (stream != null) {
+            try (InputStream input = stream) {
+                byte[] buffer = new byte[8192];
+                int count;
+                while ((count = input.read(buffer)) != -1) bytes.write(buffer, 0, count);
+            }
+        }
+        String disposition = connection.getHeaderField("Content-Disposition");
+        String type = connection.getContentType();
+        connection.disconnect();
+        if (status == 401) {
+            mainHandler.post(() -> { if (token != null) signOut("Your session has ended. Please sign in again."); });
+            throw new IllegalStateException("Session expired");
+        }
+        if (status < 200 || status >= 300) {
+            String message = null;
+            try {
+                message = describeDetail(new JSONObject(bytes.toString("UTF-8")).opt("detail"));
+            } catch (JSONException ignored) {
+                // Not JSON.
+            }
+            throw new IllegalStateException(message == null || message.isEmpty() ? "Download failed (HTTP " + status + ")." : message);
+        }
+        Download file = new Download();
+        file.data = bytes.toByteArray();
+        file.type = type == null ? "application/octet-stream" : type.split(";")[0].trim();
+        file.name = fallbackName;
+        if (disposition != null) {
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("filename=\"?([^\";]+)\"?").matcher(disposition);
+            if (m.find()) file.name = m.group(1);
+        }
+        return file;
+    }
+
+    /** Starts a system activity (e.g. the document picker) and routes its result to the open module. */
+    void startForResult(android.content.Intent intent, int requestCode) {
+        startActivityForResult(intent, requestCode);
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, android.content.Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (resultCode == RESULT_OK && data != null && current != null) current.onResult(requestCode, data);
+    }
+
+    /** Saves a downloaded file to app cache and offers it to other apps (view / share / save to Drive). */
+    void openDownloaded(Download file) {
+        try {
+            java.io.File dir = new java.io.File(getCacheDir(), "exports");
+            if (!dir.exists() && !dir.mkdirs()) throw new java.io.IOException("Cannot create export folder");
+            java.io.File out = new java.io.File(dir, file.name.replaceAll("[^A-Za-z0-9._-]", "_"));
+            try (java.io.FileOutputStream stream = new java.io.FileOutputStream(out)) {
+                stream.write(file.data);
+            }
+            android.net.Uri uri = androidx.core.content.FileProvider.getUriForFile(this, getPackageName() + ".fileprovider", out);
+            android.content.Intent send = new android.content.Intent(android.content.Intent.ACTION_SEND)
+                    .setType(file.type)
+                    .putExtra(android.content.Intent.EXTRA_STREAM, uri)
+                    .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(android.content.Intent.createChooser(send, "Open or share " + file.name));
+        } catch (Exception e) {
+            toast("Could not open the file: " + e.getMessage());
+        }
+    }
+
+    /** Multipart upload of a single file field (used for the staff CSV/Excel import). */
+    JSONObject uploadFile(String path, String field, String filename, String mime, byte[] data) throws Exception {
+        String boundary = "----panjagutta" + System.currentTimeMillis();
+        HttpURLConnection connection = (HttpURLConnection) new URL(apiUrl(path)).openConnection();
+        connection.setRequestMethod("POST");
+        connection.setConnectTimeout(12000);
+        connection.setReadTimeout(120000);
+        connection.setDoOutput(true);
+        connection.setRequestProperty("Accept", "application/json");
+        if (token != null) connection.setRequestProperty("Authorization", "Bearer " + token);
+        connection.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
+        try (OutputStream out = connection.getOutputStream()) {
+            String head = "--" + boundary + "\r\nContent-Disposition: form-data; name=\"" + field
+                    + "\"; filename=\"" + filename.replace("\"", "") + "\"\r\nContent-Type: " + mime + "\r\n\r\n";
+            out.write(head.getBytes(StandardCharsets.UTF_8));
+            out.write(data);
+            out.write(("\r\n--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
+        }
+        int status = connection.getResponseCode();
+        InputStream stream = status >= 400 ? connection.getErrorStream() : connection.getInputStream();
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        if (stream != null) {
+            try (InputStream input = stream) {
+                byte[] buffer = new byte[4096];
+                int count;
+                while ((count = input.read(buffer)) != -1) bytes.write(buffer, 0, count);
+            }
+        }
+        connection.disconnect();
+        String result = bytes.toString("UTF-8");
+        if (status < 200 || status >= 300) {
+            String message = null;
+            try {
+                message = describeDetail(new JSONObject(result).opt("detail"));
+            } catch (JSONException ignored) {
+                // Not JSON.
+            }
+            throw new IllegalStateException(message == null || message.isEmpty() ? "Upload failed (HTTP " + status + ")." : message);
+        }
+        return result.isEmpty() ? new JSONObject() : new JSONObject(result);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -1739,10 +2081,11 @@ public class MainActivity extends Activity {
 
     private void enterWorkspace() {
         loaded.clear();
-        selectedTab = "Home";
+        current = null;
+        selectedTab = landingTab();
         lastInteraction = System.currentTimeMillis();
         renderWorkspace();
-        refreshData();
+        selectTab(selectedTab);
         startPolling();
         requestNotificationPermission();
     }
@@ -1763,6 +2106,7 @@ public class MainActivity extends Activity {
 
     /** First-time / admin-reset password change (required before any other screen). */
     private void showChangePassword(String knownCurrent, boolean required) {
+        workspaceShown = false;
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setGravity(Gravity.CENTER);
@@ -1810,7 +2154,10 @@ public class MainActivity extends Activity {
         panel.addView(back, backParams);
         back.setOnClickListener(v -> {
             if (required) signOut();
-            else renderWorkspace();
+            else {
+                renderWorkspace();
+                selectTab(selectedTab);
+            }
         });
         setContentView(root);
         applyInsets(root, null);
@@ -1834,8 +2181,7 @@ public class MainActivity extends Activity {
                     body.put("current_password", cur);
                     body.put("new_password", pw);
                     request("/auth/change-password", "POST", body, false);
-                    JSONObject me = request("/mobile/me", "GET", null, false);
-                    profile = me;
+                    profile = loadProfile();
                     mainHandler.post(() -> {
                         toast("Password changed.");
                         enterWorkspace();
@@ -1888,7 +2234,7 @@ public class MainActivity extends Activity {
         content.addView(leaveHistory, historyParams);
     }
 
-    private void pickDateTime(EditText target) {
+    void pickDateTime(EditText target) {
         Calendar now = Calendar.getInstance();
         android.app.DatePickerDialog dateDialog = new android.app.DatePickerDialog(this, (dv, y, m, d) ->
                 new android.app.TimePickerDialog(this, (tv, h, min) -> {
@@ -2029,29 +2375,46 @@ public class MainActivity extends Activity {
         }
     }
 
+    /** Today's sign-ins, shown even when no shift is rostered (sign-in alone marks you present). */
+    private void addTodaySignIns() {
+        for (int i = 0; i < signInData.length(); i++) {
+            JSONObject r = signInData.optJSONObject(i);
+            if (r == null || !has(r, "check_in_at")) continue;
+            boolean late = r.optBoolean("is_late", false);
+            LinearLayout card = card(late ? AMBER : GREEN);
+            card.addView(text("SIGNED IN · SHIFT " + r.optString("shift_code"), 10, BLUE, true));
+            card.addView(text("Signed in " + formatTime(r.optString("check_in_at")) + (late ? " (late)" : ""), 14, INK, true));
+            card.addView(text(has(r, "check_out_at") ? "Signed out " + formatTime(r.optString("check_out_at")) : "Still signed in", 12, MUTED, false));
+            if (!r.optBoolean("is_scheduled", false)) card.addView(text("Not on the roster for this shift", 12, MUTED, false));
+            card.addView(statusBadge(late ? "LATE" : "PRESENT", late ? AMBER : GREEN, late ? AMBER_BG : GREEN_BG));
+            content.addView(card, cardParams());
+        }
+    }
+
     private void addAttendanceHistory() {
         if (historyData == null) return;
         sectionHeader("LAST 30 DAYS", null, null);
         LinearLayout summary = card();
-        summary.addView(text(historyData.optInt("scheduled") + " duties · " + historyData.optInt("submitted")
-                + " submitted · " + historyData.optInt("verified") + " verified", 13, INK, true));
+        summary.addView(text(historyData.optInt("scheduled") + " duties · " + historyData.optInt("present", historyData.optInt("verified"))
+                + " present · " + historyData.optInt("late") + " late", 13, INK, true));
         content.addView(summary, cardParams());
         JSONArray items = historyData.optJSONArray("items");
         if (items == null) return;
         for (int i = 0; i < Math.min(items.length(), 20); i++) {
             JSONObject e = items.optJSONObject(i);
             if (e == null || isToday(e.optString("duty_date"))) continue;
-            boolean verified = e.optBoolean("attendance_confirmed", false);
-            String submitted = e.optString("attendance_submitted_at", "");
-            boolean sent = !submitted.isEmpty() && !"null".equals(submitted);
-            LinearLayout row = card(verified ? GREEN : sent ? AMBER : MUTED);
+            String status = attendanceStatus(e);
+            LinearLayout row = card(attendanceStatusColor(e));
             LinearLayout line = new LinearLayout(this);
             line.setGravity(Gravity.CENTER_VERTICAL);
             line.addView(text(formatDate(e.optString("duty_date")) + " · Shift " + e.optString("shift_name"), 13, INK, true),
                     new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
-            line.addView(statusBadge(verified ? "VERIFIED" : sent ? "AWAITING" : "NOT SUBMITTED",
-                    verified ? GREEN : sent ? AMBER : MUTED, verified ? GREEN_BG : sent ? AMBER_BG : BACKGROUND));
+            line.addView(statusBadge(status, attendanceStatusColor(e), attendanceStatusBackground(e)));
             row.addView(line);
+            if (has(e, "check_in_at")) {
+                row.addView(text("In " + formatTime(e.optString("check_in_at"))
+                        + (has(e, "check_out_at") ? "  ·  Out " + formatTime(e.optString("check_out_at")) : ""), 12, INK, false));
+            }
             row.addView(text(e.optString("duty_category"), 12, MUTED, false));
             content.addView(row, cardParams());
         }
@@ -2079,7 +2442,7 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void fetchNotifications(boolean alert) {
+    void fetchNotifications(boolean alert) {
         if (token == null) return;
         executor.execute(() -> {
             try {
@@ -2167,6 +2530,11 @@ public class MainActivity extends Activity {
             card.setClickable(true);
             card.setOnClickListener(v -> {
                 if (!read) postSimple("/notifications/" + id + "/read", null, null, null);
+                if (!isStaffRole()) {
+                    String module = RoleAccess.moduleForEntity(entity);
+                    if (module != null && RoleAccess.canSee(module, role())) openModule(module);
+                    return;
+                }
                 String target = "Roster".equals(entity) ? "Roster" : "Task".equals(entity) ? "Home"
                         : "LeaveRequest".equals(entity) || "Movement".equals(entity) ? "Leave" : null;
                 if ("Movement".equals(entity)) requestMode = "movement";
@@ -2181,7 +2549,7 @@ public class MainActivity extends Activity {
     // Small helpers
     // ─────────────────────────────────────────────────────────────────────────
 
-    private void confirm(String question, Runnable onYes) {
+    void confirm(String question, Runnable onYes) {
         new android.app.AlertDialog.Builder(this)
                 .setMessage(question)
                 .setNegativeButton("No", null)
@@ -2190,7 +2558,7 @@ public class MainActivity extends Activity {
     }
 
     /** POST, then refresh `reloadTab` (null = just refresh notifications). */
-    private void postSimple(String path, JSONObject body, String okMessage, String reloadTab) {
+    void postSimple(String path, JSONObject body, String okMessage, String reloadTab) {
         executor.execute(() -> {
             try {
                 request(path, "POST", body == null ? new JSONObject() : body, false);
@@ -2210,12 +2578,12 @@ public class MainActivity extends Activity {
         });
     }
 
-    private LinearLayout card() {
+    LinearLayout card() {
         return card(0);
     }
 
     /** White elevated card; a non-zero accent colour adds a status stripe on the left edge. */
-    private LinearLayout card(int accent) {
+    LinearLayout card(int accent) {
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
         layout.setPadding(dp(accent == 0 ? 16 : 20), dp(14), dp(16), dp(14));
@@ -2231,19 +2599,19 @@ public class MainActivity extends Activity {
         return layout;
     }
 
-    private android.graphics.drawable.Drawable rippleOf(int fill, int radius) {
+    android.graphics.drawable.Drawable rippleOf(int fill, int radius) {
         return new android.graphics.drawable.RippleDrawable(
                 android.content.res.ColorStateList.valueOf(0x221a56db),
                 roundRect(fill, fill, radius), roundRect(Color.WHITE, Color.WHITE, radius));
     }
 
-    private View cardMessage(String message) {
+    View cardMessage(String message) {
         LinearLayout card = card();
         card.addView(text(message, 14, MUTED, false));
         return card;
     }
 
-    private TextView text(String value, int size, int color, boolean bold) {
+    TextView text(String value, int size, int color, boolean bold) {
         TextView view = new TextView(this);
         view.setText(value);
         view.setTextSize(size + 3);
@@ -2253,7 +2621,7 @@ public class MainActivity extends Activity {
         return view;
     }
 
-    private EditText input(String hint, int inputType) {
+    EditText input(String hint, int inputType) {
         EditText edit = new EditText(this);
         edit.setSingleLine(true);
         edit.setTextSize(14);
@@ -2266,13 +2634,13 @@ public class MainActivity extends Activity {
         return edit;
     }
 
-    private void styleLoginInput(EditText edit) {
+    void styleLoginInput(EditText edit) {
         edit.setTextColor(Color.rgb(245, 248, 252));
         edit.setHintTextColor(0xffc0c9d5);
         edit.setBackground(roundRect(0x1cffffff, 0x66b1c2d2, 9));
     }
 
-    private Button button(String label, int color) {
+    Button button(String label, int color) {
         Button button = new Button(this);
         button.setText(label);
         button.setTextColor(Color.WHITE);
@@ -2283,7 +2651,7 @@ public class MainActivity extends Activity {
         return button;
     }
 
-    private Button smallButton(String label, int background, int foreground) {
+    Button smallButton(String label, int background, int foreground) {
         Button button = new Button(this);
         button.setText(label);
         button.setTextColor(foreground);
@@ -2295,7 +2663,7 @@ public class MainActivity extends Activity {
         return button;
     }
 
-    private GradientDrawable roundRect(int fill, int stroke, int radius) {
+    GradientDrawable roundRect(int fill, int stroke, int radius) {
         GradientDrawable drawable = new GradientDrawable();
         drawable.setColor(fill);
         drawable.setCornerRadius(dp(radius));
@@ -2303,36 +2671,36 @@ public class MainActivity extends Activity {
         return drawable;
     }
 
-    private LinearLayout.LayoutParams fieldParams() {
+    LinearLayout.LayoutParams fieldParams() {
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(48));
         params.bottomMargin = dp(10);
         return params;
     }
 
-    private LinearLayout.LayoutParams cardParams() {
+    LinearLayout.LayoutParams cardParams() {
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         params.bottomMargin = dp(16);
         return params;
     }
 
-    private int dp(int value) {
+    int dp(int value) {
         return Math.round(value * getResources().getDisplayMetrics().density);
     }
 
-    private String today() {
+    String today() {
         return new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date());
     }
 
-    private String daysFromToday(int days) {
+    String daysFromToday(int days) {
         Calendar calendar = Calendar.getInstance();
         calendar.add(Calendar.DAY_OF_YEAR, days);
         return new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(calendar.getTime());
     }
 
     /** Parses server timestamps such as 2026-11-03T08:30:00.123456+00:00 (API 23 safe). */
-    private Date parseIso(String value) {
+    Date parseIso(String value) {
         if (value == null || value.length() < 19 || value.charAt(10) != 'T') return null;
         try {
             String s = value.replaceAll("\\.\\d+", "").replace("Z", "+0000");
@@ -2344,21 +2712,21 @@ public class MainActivity extends Activity {
         }
     }
 
-    private String formatDate(String value) {
+    String formatDate(String value) {
         Date parsed = parseIso(value);
         if (parsed != null) return new SimpleDateFormat("dd/MM/yyyy", Locale.getDefault()).format(parsed);
         if (value == null || value.length() < 10) return value == null ? "" : value;
         return value.substring(8, 10) + "/" + value.substring(5, 7) + "/" + value.substring(0, 4);
     }
 
-    private String formatTime(String value) {
+    String formatTime(String value) {
         Date parsed = parseIso(value);
         if (parsed != null) return new SimpleDateFormat("HH:mm", Locale.getDefault()).format(parsed);
         if (value == null || value.length() < 16) return value == null ? "" : value;
         return value.substring(11, 16);
     }
 
-    private boolean validDate(String value) {
+    boolean validDate(String value) {
         if (value.length() != 10) return false;
         try {
             SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd", Locale.US);
@@ -2370,7 +2738,7 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void toast(String message) {
+    void toast(String message) {
         Toast.makeText(this, message, Toast.LENGTH_LONG).show();
     }
 }

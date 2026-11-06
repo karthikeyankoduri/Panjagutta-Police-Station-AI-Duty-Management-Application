@@ -17,7 +17,8 @@ from app.auth.jwt import verify_password, create_access_token, hash_password, de
 from app.auth.dependencies import get_current_user
 from app.core.config import settings
 from app.db.database import get_db
-from app.models.models import Staff, User, UserSession
+from app.models.models import Sector, Staff, User, UserSession
+from app.services.attendance_auto import record_sign_in, record_sign_out
 from app.services.audit import log_event, AuditAction
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
@@ -180,6 +181,8 @@ async def login(
 
     await log_event(db, actor=user, action=AuditAction.LOGIN, entity_type="User", entity_id=user.id,
                     ip_address=client_ip)
+    # Attendance comes from signing in; a failure here is logged and never blocks the login.
+    await record_sign_in(db, user)
     await db.commit()
 
     return LoginResponse(
@@ -211,6 +214,7 @@ async def logout(
 
     await log_event(db, actor=current_user, action=AuditAction.LOGOUT, entity_type="User", entity_id=current_user.id,
                     ip_address=request.client.host if request.client else None)
+    await record_sign_out(db, current_user)
     await db.commit()
     return {"detail": "Logged out successfully"}
 
@@ -285,14 +289,38 @@ async def get_me(
 ):
     staff_name = None
     service_number = None
+    profile = {}
     if current_user.staff_id:
         st_res = await db.execute(select(Staff).where(Staff.id == current_user.staff_id))
         st = st_res.scalar_one_or_none()
         if st:
             staff_name = st.name
             service_number = st.service_number
+            officer = await db.get(Staff, st.reporting_officer_id) if st.reporting_officer_id else None
+            profile = {
+                "designation": st.designation.value,
+                "category": st.category.value,
+                "section": st.section,
+                "contact_phone": st.contact_phone,  # the user's own record only
+                "reporting_officer": officer.name if officer else None,
+                "date_of_joining": st.date_of_joining.isoformat() if st.date_of_joining else None,
+            }
+    # A Sector SI's sector comes from the login; everyone else's from their staff record.
+    sector_id = current_user.sector_id
+    if sector_id is None and current_user.staff_id and profile:
+        sector_id = (await db.get(Staff, current_user.staff_id)).sector_id
+    sector_name = None
+    if sector_id is not None:
+        sector = await db.get(Sector, sector_id)
+        sector_name = sector.name if sector else f"Sector {sector_id}"
 
     return {
+        **profile,
+        "sector_name": sector_name,
+        "email": current_user.email,
+        "is_active": current_user.is_active,
+        "last_login": current_user.last_login.isoformat() if current_user.last_login else None,
+        "member_since": current_user.created_at.isoformat() if current_user.created_at else None,
         "id": current_user.id,
         "username": current_user.username,
         "role": current_user.role.value,

@@ -2,17 +2,14 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
 import AppShell from "@/components/AppShell";
 import { useAuth } from "@/lib/auth-context";
-import { useToday } from "@/lib/use-today";
+import { isoLocal, useToday } from "@/lib/use-today";
 import {
   getStaff,
   getAttendance,
-  markAttendance,
-  bulkAttendance,
+  getCurrentShift,
   getPolicyStatus,
   getMyDuties,
-  submitOwnAttendance,
   getScheduledVsConfirmed,
-  verifyAttendance,
   formatApiError,
   StaffMember,
 } from "@/lib/api";
@@ -25,9 +22,10 @@ interface AttendanceRecord {
   designation: string;
   is_scheduled: boolean;
   is_confirmed: boolean;
-  verified_by?: string;
-  verified_at?: string;
-  status: "Present" | "Absent" | "Pending";
+  check_in_at?: string | null;
+  check_out_at?: string | null;
+  is_late?: boolean;
+  status: "Present" | "Unscheduled" | "Not signed in" | "Off-shift";
   shift_code?: string;
   attendance_date?: string;
   notes?: string;
@@ -42,6 +40,20 @@ const MONTH_NAMES = [
 ];
 
 const WEEKDAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/** HH:MM in the viewer's local time, or an em dash. */
+function fmtTime(iso?: string | null): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "—" : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+/** Time spent signed in, e.g. "5h 40m", or an em dash while still signed in. */
+function fmtDuration(from?: string | null, to?: string | null): string {
+  if (!from || !to) return "—";
+  const mins = Math.max(0, Math.round((new Date(to).getTime() - new Date(from).getTime()) / 60000));
+  return `${Math.floor(mins / 60)}h ${String(mins % 60).padStart(2, "0")}m`;
+}
 
 export default function AttendancePage() {
   const { token, user } = useAuth();
@@ -61,7 +73,6 @@ export default function AttendancePage() {
   const [, setTimingsLoaded] = useState(0);
   const [myDuties, setMyDuties] = useState<any[]>([]);
   const [verifyRows, setVerifyRows] = useState<any | null>(null);
-  const canVerify = ["SUPER_ADMIN", "ADMIN_SI", "SHO", "SECTOR_SI"].includes(user?.role || "");
 
   useEffect(() => {
     if (!token) return;
@@ -74,17 +85,6 @@ export default function AttendancePage() {
 
   const todayLocal = useToday();
   const todaysDuties = myDuties.filter((d) => d.duty_date === todayLocal);
-
-  const handleSubmitOwn = async (shift: string) => {
-    if (!token) return;
-    try {
-      await submitOwnAttendance(token, { attendance_date: todayLocal, shift_code: shift });
-      setMessage({ text: `Attendance submitted for Shift ${shift}. An officer will verify it.`, type: "info" });
-      setMyDuties(await getMyDuties(token));
-    } catch (err: any) {
-      setMessage({ text: formatApiError(err, "Could not submit attendance"), type: "warning" });
-    }
-  };
 
   const loadVerify = useCallback(async (date: string, shift: string) => {
     if (!token) return;
@@ -110,33 +110,44 @@ export default function AttendancePage() {
 
   useEffect(() => {
     if (!stationDate) {
-      setStationDate(new Date().toISOString().split("T")[0]);
+      setStationDate(isoLocal(new Date()));
     }
   }, [stationDate]);
 
+  // Open on the shift that is running now (sign-ins are recorded against it), not always Shift A.
+  useEffect(() => {
+    if (!token) return;
+    getCurrentShift(token)
+      .then((c) => { setStationShift(c.shift_code); setStationDate(c.date); })
+      .catch(() => null);
+  }, [token]);
+
   const loadStationAttendance = useCallback(async () => {
     if (!token || isStaff) return;
-    const dateToLoad = stationDate || new Date().toISOString().split("T")[0];
+    const dateToLoad = stationDate || isoLocal(new Date());
     setStationLoading(true);
     try {
-      const [staffList, attRecords] = await Promise.all([
+      const [staffList, attRecords, sched] = await Promise.all([
         getStaff(token, { is_active: true }),
         getAttendance(token, { attendance_date: dateToLoad, shift_code: stationShift }),
+        getScheduledVsConfirmed(token, dateToLoad, stationShift).catch(() => null),
       ]);
 
       const attMap = new Map<number, any>();
       if (Array.isArray(attRecords)) {
         attRecords.forEach((a: any) => attMap.set(a.staff_id, a));
       }
+      const scheduledIds = new Set<number>(
+        ((sched?.rows as any[]) || []).filter((r) => r.scheduled).map((r) => r.staff_id)
+      );
 
       const merged: AttendanceRecord[] = (staffList || []).map((s) => {
         const att = attMap.get(s.id);
+        const isScheduled = scheduledIds.has(s.id) || Boolean(att?.is_scheduled);
         const isConfirmed = att ? Boolean(att.is_confirmed) : false;
-        const isScheduled = att ? Boolean(att.is_scheduled) : true;
-        let status: "Present" | "Absent" | "Pending" = "Pending";
-        if (att) {
-          status = isConfirmed ? "Present" : "Absent";
-        }
+        let status: AttendanceRecord["status"];
+        if (att) status = isConfirmed ? "Present" : "Unscheduled";
+        else status = isScheduled ? "Not signed in" : "Off-shift";
         return {
           id: att?.id || s.id,
           staff_id: s.id,
@@ -145,7 +156,9 @@ export default function AttendancePage() {
           designation: s.designation,
           is_scheduled: isScheduled,
           is_confirmed: isConfirmed,
-          verified_by: att?.verified_by_id ? String(att.verified_by_id) : undefined,
+          check_in_at: att?.check_in_at,
+          check_out_at: att?.check_out_at,
+          is_late: Boolean(att?.is_late),
           status,
           shift_code: att?.shift_code || stationShift,
           attendance_date: att?.attendance_date || dateToLoad,
@@ -166,48 +179,6 @@ export default function AttendancePage() {
       loadStationAttendance();
     }
   }, [activeTab, loadStationAttendance, isStaff]);
-
-  const handleMarkStation = async (staffId: number, status: "Present" | "Absent") => {
-    if (!token) return;
-    const dateToSave = stationDate || new Date().toISOString().split("T")[0];
-    try {
-      await markAttendance(token, {
-        staff_id: staffId,
-        attendance_date: dateToSave,
-        shift_code: stationShift,
-        is_confirmed: status === "Present",
-        status,
-      });
-      setStationRecords((prev) =>
-        prev.map((r) =>
-          r.staff_id === staffId
-            ? { ...r, is_confirmed: status === "Present", status }
-            : r
-        )
-      );
-      setMessage({ text: `Attendance updated for staff #${staffId} (${status}).`, type: "info" });
-    } catch (err: any) {
-      setMessage({ text: `Failed to update attendance: ${err.message}`, type: "warning" });
-    }
-  };
-
-  const handleBulkConfirm = async () => {
-    if (!token) return;
-    const dateToSave = stationDate || new Date().toISOString().split("T")[0];
-    try {
-      await bulkAttendance(token, {
-        attendance_date: dateToSave,
-        shift_code: stationShift,
-        action: "confirm_all",
-      });
-      setStationRecords((prev) =>
-        prev.map((r) => ({ ...r, is_scheduled: true, is_confirmed: true, status: "Present" }))
-      );
-      setMessage({ text: "All personnel confirmed Present for this shift.", type: "info" });
-    } catch (err: any) {
-      setMessage({ text: `Failed to bulk confirm attendance: ${err.message}`, type: "warning" });
-    }
-  };
 
   // ───────────────────────────────────────────────────────────────────────────
   // Personal Attendance & Monthly Calendar State
@@ -367,14 +338,18 @@ export default function AttendancePage() {
   }, [personalRecords, selectedCalDate]);
 
   // Monthly stats
+  const todaySignIns = useMemo(
+    () => personalRecords.filter((r) => r.attendance_date === todayLocal && r.check_in_at),
+    [personalRecords, todayLocal]
+  );
   const monthlyConfirmedPresent = personalRecords.filter((r) => r.is_confirmed).length;
-  const monthlyAbsent = personalRecords.filter((r) => !r.is_confirmed && r.is_scheduled).length;
-  const monthlyScheduled = personalRecords.filter((r) => r.is_scheduled).length;
+  const monthlyLate = personalRecords.filter((r) => r.is_late).length;
+  const monthlySignIns = personalRecords.filter((r) => r.check_in_at).length;
 
   // Station counts for supervisor console
   const presentCount = stationRecords.filter((r) => r.status === "Present").length;
-  const absentCount = stationRecords.filter((r) => r.status === "Absent").length;
-  const pendingCount = stationRecords.filter((r) => r.status === "Pending").length;
+  const lateCount = stationRecords.filter((r) => r.is_late).length;
+  const notSignedInCount = stationRecords.filter((r) => r.status === "Not signed in").length;
   const scheduledCount = stationRecords.filter((r) => r.is_scheduled).length;
 
   const filteredStationRecords = stationRecords.filter((r) => {
@@ -414,26 +389,49 @@ export default function AttendancePage() {
             onClick={() => { setActiveTab("verify"); loadVerify(stationDate || todayLocal, stationShift); }}
             id="tab-verify"
           >
-            🧾 Scheduled vs Confirmed
+            🧾 Scheduled vs Signed in
           </button>
+        </div>
+      )}
+
+      {todaySignIns.length > 0 && (activeTab === "personal" || isStaff) && (
+        <div className="card" style={{ marginBottom: 16 }}>
+          <div className="card__header"><span className="card__title">Today&apos;s sign-ins</span></div>
+          <div className="card__body" style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+            {todaySignIns.map((r: any) => (
+              <div key={r.id} style={{ border: "1px solid var(--color-border, #e2e8f0)", borderRadius: 8, padding: "10px 14px", minWidth: 220 }}>
+                <div style={{ fontWeight: 700 }}>Shift {r.shift_code}{SHIFT_TIMINGS[r.shift_code] ? ` · ${SHIFT_TIMINGS[r.shift_code]}` : ""}</div>
+                <div style={{ marginTop: 8 }}>
+                  <span className={`badge ${r.is_late ? "badge-warning" : "badge-success"}`}>
+                    Signed in {fmtTime(r.check_in_at)}{r.is_late ? " · late" : ""}
+                  </span>
+                  {r.check_out_at && <span className="badge badge-default" style={{ marginLeft: 6 }}>Signed out {fmtTime(r.check_out_at)}</span>}
+                  {!r.is_scheduled && <span className="badge badge-default" style={{ marginLeft: 6 }}>Not on roster</span>}
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
       {todaysDuties.length > 0 && (activeTab === "personal" || isStaff) && (
         <div className="card" style={{ marginBottom: 16 }}>
-          <div className="card__header"><span className="card__title">Today&apos;s published duty</span></div>
+          <div className="card__header"><span className="card__title">Today&apos;s published duty · attendance is recorded when you sign in</span></div>
           <div className="card__body" style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
             {todaysDuties.map((d: any) => (
               <div key={`${d.roster_id}-${d.duty_category}`} style={{ border: "1px solid var(--color-border, #e2e8f0)", borderRadius: 8, padding: "10px 14px", minWidth: 220 }}>
                 <div style={{ fontWeight: 700 }}>Shift {d.shift_name} · {d.start_time}–{d.end_time}</div>
                 <div style={{ fontSize: 13 }}>{d.duty_category}</div>
                 <div style={{ marginTop: 8 }}>
-                  {d.attendance_confirmed ? (
-                    <span className="badge badge-success">Verified</span>
-                  ) : d.attendance_submitted_at ? (
-                    <span className="badge badge-warning">Submitted · awaiting verification</span>
+                  {d.check_in_at ? (
+                    <>
+                      <span className={`badge ${d.is_late ? "badge-warning" : "badge-success"}`}>
+                        Signed in {fmtTime(d.check_in_at)}{d.is_late ? " · late" : ""}
+                      </span>
+                      {d.check_out_at && <span className="badge badge-default" style={{ marginLeft: 6 }}>Signed out {fmtTime(d.check_out_at)}</span>}
+                    </>
                   ) : (
-                    <button className="btn btn-primary btn-sm" onClick={() => handleSubmitOwn(d.shift_name)}>Submit my attendance</button>
+                    <span className="badge badge-default">Not signed in yet</span>
                   )}
                 </div>
               </div>
@@ -461,17 +459,10 @@ export default function AttendancePage() {
             <div>
               <h1 className="page-title">Station Daily Attendance &amp; Roll-Call</h1>
               <div className="page-subtitle">
-                Supervisory station strength headcount, shift roll-call confirmation, and per-officer attendance logging.
+                Attendance is recorded automatically when each person signs in and out. This view is read-only.
               </div>
             </div>
             <div style={{ display: "flex", gap: "10px" }}>
-              <button
-                className="btn btn-secondary btn-sm"
-                onClick={handleBulkConfirm}
-                id="btn-bulk-confirm"
-              >
-                ✓ Bulk Confirm Scheduled Present
-              </button>
               <button
                 className="btn btn-secondary btn-sm"
                 onClick={loadStationAttendance}
@@ -539,23 +530,23 @@ export default function AttendancePage() {
             <div className="card">
               <div className="card__body" style={{ textAlign: "center" }}>
                 <div style={{ fontSize: "22px", fontWeight: 700, color: "#22c55e" }}>{presentCount}</div>
-                <div style={{ fontSize: "12px", color: "#94a3b8" }}>Confirmed Present</div>
+                <div style={{ fontSize: "12px", color: "#94a3b8" }}>Signed in (Present)</div>
               </div>
             </div>
             <div className="card">
               <div className="card__body" style={{ textAlign: "center" }}>
-                <div style={{ fontSize: "22px", fontWeight: 700, color: absentCount > 0 ? "#ef4444" : "#64748b" }}>
-                  {absentCount}
+                <div style={{ fontSize: "22px", fontWeight: 700, color: lateCount > 0 ? "#f59e0b" : "#64748b" }}>
+                  {lateCount}
                 </div>
-                <div style={{ fontSize: "12px", color: "#94a3b8" }}>Marked Absent</div>
+                <div style={{ fontSize: "12px", color: "#94a3b8" }}>Signed in late</div>
               </div>
             </div>
             <div className="card">
               <div className="card__body" style={{ textAlign: "center" }}>
-                <div style={{ fontSize: "22px", fontWeight: 700, color: pendingCount > 0 ? "#f59e0b" : "#64748b" }}>
-                  {pendingCount}
+                <div style={{ fontSize: "22px", fontWeight: 700, color: notSignedInCount > 0 ? "#ef4444" : "#64748b" }}>
+                  {notSignedInCount}
                 </div>
-                <div style={{ fontSize: "12px", color: "#94a3b8" }}>Pending Roll-Call</div>
+                <div style={{ fontSize: "12px", color: "#94a3b8" }}>Scheduled, not signed in</div>
               </div>
             </div>
           </div>
@@ -588,7 +579,9 @@ export default function AttendancePage() {
                         <th>Designation</th>
                         <th>Roster Scheduled</th>
                         <th>Attendance Status</th>
-                        <th>Roll-Call Action</th>
+                        <th>Signed in</th>
+                        <th>Signed out</th>
+                        <th>Time on duty</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -609,30 +602,18 @@ export default function AttendancePage() {
                               className={`badge ${
                                 r.status === "Present"
                                   ? "badge-success"
-                                  : r.status === "Absent"
+                                  : r.status === "Not signed in"
                                   ? "badge-danger"
                                   : "badge-default"
                               }`}
                             >
                               {r.status}
                             </span>
+                            {r.is_late && <span className="badge badge-warning" style={{ marginLeft: 6 }}>Late</span>}
                           </td>
-                          <td>
-                            <div style={{ display: "flex", gap: "6px" }}>
-                              <button
-                                className="btn btn-success btn-sm"
-                                onClick={() => handleMarkStation(r.staff_id, "Present")}
-                              >
-                                ✓ Present
-                              </button>
-                              <button
-                                className="btn btn-danger btn-sm"
-                                onClick={() => handleMarkStation(r.staff_id, "Absent")}
-                              >
-                                ✗ Absent
-                              </button>
-                            </div>
-                          </td>
+                          <td>{fmtTime(r.check_in_at)}</td>
+                          <td>{r.check_in_at && !r.check_out_at ? <span className="text-muted">Still signed in</span> : fmtTime(r.check_out_at)}</td>
+                          <td>{fmtDuration(r.check_in_at, r.check_out_at)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -648,8 +629,8 @@ export default function AttendancePage() {
         <>
           <div className="page-header">
             <div>
-              <h1 className="page-title">Scheduled vs Confirmed Attendance</h1>
-              <div className="page-subtitle">Scheduled duty comes from the latest published roster; confirmed attendance is verified by an officer.</div>
+              <h1 className="page-title">Scheduled vs Signed-in Attendance</h1>
+              <div className="page-subtitle">Scheduled duty comes from the latest published roster; attendance is recorded automatically at sign-in.</div>
             </div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
               <input type="date" className="form-control" value={stationDate} onChange={(e) => setStationDate(e.target.value)} aria-label="Date" />
@@ -664,9 +645,9 @@ export default function AttendancePage() {
               <div className="stats-grid-5" style={{ marginBottom: 16 }}>
                 {[
                   ["Scheduled", verifyRows.scheduled],
-                  ["Confirmed", verifyRows.confirmed],
-                  ["Scheduled, not confirmed", verifyRows.scheduled_not_confirmed],
-                  ["Confirmed, not scheduled", verifyRows.confirmed_not_scheduled],
+                  ["Signed in", verifyRows.confirmed],
+                  ["Scheduled, not signed in", verifyRows.scheduled_not_confirmed],
+                  ["Signed in, not scheduled", verifyRows.confirmed_not_scheduled],
                 ].map(([label, n]) => (
                   <div className="card" key={label as string}><div className="card__body" style={{ textAlign: "center" }}>
                     <div style={{ fontSize: 22, fontWeight: 700 }}>{n as number}</div>
@@ -677,22 +658,18 @@ export default function AttendancePage() {
               {!verifyRows.roster_id && <div className="alert-banner alert-banner--info" style={{ marginBottom: 12 }}>No published roster for this shift yet.</div>}
               <div className="card"><div className="card__body" style={{ padding: 0 }}>
                 <table className="table">
-                  <thead><tr><th>Service #</th><th>Name</th><th>Scheduled</th><th>Submitted</th><th>Confirmed</th><th></th></tr></thead>
+                  <thead><tr><th>Service #</th><th>Name</th><th>Scheduled</th><th>Status</th><th>Signed in</th><th>Signed out</th></tr></thead>
                   <tbody>
                     {verifyRows.rows.map((r: any) => (
                       <tr key={r.staff_id}>
                         <td><strong>{r.service_number}</strong></td><td>{r.name}</td>
                         <td>{r.scheduled ? <span className="badge badge-info">Scheduled</span> : "—"}</td>
-                        <td>{r.submitted ? "Yes" : "—"}</td>
-                        <td>{r.confirmed ? <span className="badge badge-success">Verified</span> : <span className="badge badge-default">Not confirmed</span>}</td>
                         <td>
-                          {canVerify && r.attendance_id && !r.confirmed && (
-                            <button className="btn btn-success btn-sm" onClick={async () => {
-                              try { await verifyAttendance(token!, r.attendance_id); loadVerify(stationDate || todayLocal, stationShift); }
-                              catch (err: any) { setMessage({ text: formatApiError(err, "Could not verify"), type: "warning" }); }
-                            }}>Verify</button>
-                          )}
+                          {r.confirmed ? <span className="badge badge-success">Present</span> : r.attendance_id ? <span className="badge badge-default">Unscheduled sign-in</span> : <span className="badge badge-danger">Not signed in</span>}
+                          {r.is_late && <span className="badge badge-warning" style={{ marginLeft: 6 }}>Late</span>}
                         </td>
+                        <td>{fmtTime(r.check_in_at)}</td>
+                        <td>{fmtTime(r.check_out_at)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -714,7 +691,7 @@ export default function AttendancePage() {
                 {isStaff ? "My Daily Attendance & Duty Calendar" : "My Personal Attendance Record"}
               </h1>
               <div className="page-subtitle">
-                Track your scheduled shifts, verified presence, and view monthly duty attendance history.
+                Your attendance is recorded automatically each time you sign in and out. Review your shifts and monthly history here.
               </div>
             </div>
 
@@ -761,12 +738,12 @@ export default function AttendancePage() {
                   <div style={{ fontSize: "10px", color: "#94a3b8", textTransform: "uppercase" }}>Days Present</div>
                 </div>
                 <div style={{ textAlign: "center", padding: "6px 12px", background: "rgba(255,255,255,0.05)", borderRadius: "8px" }}>
-                  <div style={{ fontSize: "18px", fontWeight: 800, color: monthlyAbsent > 0 ? "#ef4444" : "#94a3b8" }}>{monthlyAbsent}</div>
-                  <div style={{ fontSize: "10px", color: "#94a3b8", textTransform: "uppercase" }}>Days Absent</div>
+                  <div style={{ fontSize: "18px", fontWeight: 800, color: monthlyLate > 0 ? "#f59e0b" : "#94a3b8" }}>{monthlyLate}</div>
+                  <div style={{ fontSize: "10px", color: "#94a3b8", textTransform: "uppercase" }}>Late Sign-ins</div>
                 </div>
                 <div style={{ textAlign: "center", padding: "6px 12px", background: "rgba(255,255,255,0.05)", borderRadius: "8px" }}>
-                  <div style={{ fontSize: "18px", fontWeight: 800, color: "#38bdf8" }}>{monthlyScheduled}</div>
-                  <div style={{ fontSize: "10px", color: "#94a3b8", textTransform: "uppercase" }}>Total Scheduled</div>
+                  <div style={{ fontSize: "18px", fontWeight: 800, color: "#38bdf8" }}>{monthlySignIns}</div>
+                  <div style={{ fontSize: "10px", color: "#94a3b8", textTransform: "uppercase" }}>Total Sign-ins</div>
                 </div>
               </div>
             </div>
@@ -856,12 +833,12 @@ export default function AttendancePage() {
                           <div style={{ marginTop: "4px" }}>
                             {hasRecord ? (
                               isConfirmed ? (
-                                <span className="day-pill badge-green" title="Confirmed Present">
-                                  ● Present
+                                <span className={`day-pill ${day.record?.is_late ? "badge-yellow" : "badge-green"}`} title={day.record?.is_late ? "Signed in late" : "Signed in on time"}>
+                                  ● {day.record?.is_late ? "Late" : "Present"}
                                 </span>
                               ) : (
-                                <span className="day-pill badge-red" title="Marked Absent">
-                                  ● Absent
+                                <span className="day-pill badge-gray" title="Signed in, not on the roster for this shift">
+                                  ● Unscheduled
                                 </span>
                               )
                             ) : (
@@ -899,16 +876,16 @@ export default function AttendancePage() {
                     {selectedDayRecord ? (
                       selectedDayRecord.is_confirmed ? (
                         <span className="badge badge-green" style={{ fontSize: "12px", padding: "5px 12px" }}>
-                          ✓ Confirmed Present
+                          ✓ Present{selectedDayRecord.is_late ? " (late)" : ""}
                         </span>
                       ) : (
-                        <span className="badge badge-red" style={{ fontSize: "12px", padding: "5px 12px" }}>
-                          ✗ Marked Absent
+                        <span className="badge badge-gray" style={{ fontSize: "12px", padding: "5px 12px" }}>
+                          Signed in · not on roster
                         </span>
                       )
                     ) : (
                       <span className="badge badge-gray" style={{ fontSize: "12px", padding: "5px 12px" }}>
-                        ⚪ No Roll-Call Recorded
+                        ⚪ No sign-in recorded
                       </span>
                     )}
                   </div>
@@ -930,23 +907,27 @@ export default function AttendancePage() {
                   </div>
 
                   <div>
-                    <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--color-muted)", textTransform: "uppercase" }}>Verified By Supervisor</div>
+                    <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--color-muted)", textTransform: "uppercase" }}>Signed in</div>
                     <div style={{ fontSize: "14px", fontWeight: 600, color: "#1e293b", marginTop: "2px" }}>
-                      {selectedDayRecord?.verified_by_id ? `Supervisor #${selectedDayRecord.verified_by_id}` : (selectedDayRecord?.is_confirmed ? "Station Officer" : "Pending Verification")}
+                      {selectedDayRecord?.check_in_at
+                        ? `${fmtTime(selectedDayRecord.check_in_at)}${selectedDayRecord.is_late ? " (late)" : ""}`
+                        : selectedDayRecord ? "Marked by a supervisor (earlier record)" : "—"}
                     </div>
                   </div>
 
                   <div>
-                    <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--color-muted)", textTransform: "uppercase" }}>Verification Timestamp</div>
+                    <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--color-muted)", textTransform: "uppercase" }}>Signed out</div>
                     <div style={{ fontSize: "13px", color: "#475569", marginTop: "2px" }}>
-                      {selectedDayRecord?.verified_at ? new Date(selectedDayRecord.verified_at).toLocaleTimeString() : "—"}
+                      {selectedDayRecord?.check_in_at && !selectedDayRecord?.check_out_at
+                        ? "Still signed in"
+                        : `${fmtTime(selectedDayRecord?.check_out_at)}${selectedDayRecord?.check_out_at ? ` · ${fmtDuration(selectedDayRecord.check_in_at, selectedDayRecord.check_out_at)} on duty` : ""}`}
                     </div>
                   </div>
                 </div>
 
                 {selectedDayRecord?.notes && (
                   <div style={{ marginTop: "12px", fontSize: "12px", color: "#475569" }}>
-                    <strong>Officer Remarks:</strong> {selectedDayRecord.notes}
+                    <strong>Remarks:</strong> {selectedDayRecord.notes}
                   </div>
                 )}
               </div>
@@ -984,9 +965,9 @@ export default function AttendancePage() {
                           <th>Shift</th>
                           <th>Shift Timings</th>
                           <th>Scheduled</th>
-                          <th>Roll-Call Status</th>
-                          <th>Verified By</th>
-                          <th>Timestamp</th>
+                          <th>Status</th>
+                          <th>Signed in</th>
+                          <th>Signed out</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -1007,15 +988,16 @@ export default function AttendancePage() {
                               )}
                             </td>
                             <td>
-                              <span className={`badge ${r.is_confirmed ? "badge-success" : "badge-danger"}`}>
-                                {r.is_confirmed ? "Present" : "Absent"}
+                              <span className={`badge ${r.is_confirmed ? "badge-success" : "badge-default"}`}>
+                                {r.is_confirmed ? "Present" : "Unscheduled"}
                               </span>
+                              {r.is_late && <span className="badge badge-warning" style={{ marginLeft: 6 }}>Late</span>}
                             </td>
                             <td style={{ fontSize: "12px", color: "#64748b" }}>
-                              {r.verified_by_id ? `Supervisor #${r.verified_by_id}` : (r.is_confirmed ? "Station Officer" : "Pending")}
+                              {r.check_in_at ? fmtTime(r.check_in_at) : "Supervisor-marked"}
                             </td>
                             <td style={{ fontSize: "12px", color: "#94a3b8" }}>
-                              {r.verified_at ? new Date(r.verified_at).toLocaleTimeString() : "—"}
+                              {r.check_in_at && !r.check_out_at ? "Still signed in" : fmtTime(r.check_out_at)}
                             </td>
                           </tr>
                         ))}

@@ -31,6 +31,7 @@ from app.api.routes.ai import router as ai_router
 from app.api.routes.mobile import router as mobile_router
 from app.api.routes.config import router as config_router
 from app.api.routes.notifications import router as notifications_router
+from app.api.routes.duty_changes import change_request_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -165,7 +166,7 @@ async def auth_rate_limit(request: Request, call_next):
 # Routers
 for r in (auth_router, staff_router, dashboard_router, roster_router, leave_router, movement_router,
           attendance_router, task_router, attachments_router, duties_router, policy_router, reports_router,
-          audit_router, ai_router, mobile_router, config_router, notifications_router):
+          audit_router, ai_router, mobile_router, config_router, notifications_router, change_request_router):
     app.include_router(r, prefix="/api")
 
 

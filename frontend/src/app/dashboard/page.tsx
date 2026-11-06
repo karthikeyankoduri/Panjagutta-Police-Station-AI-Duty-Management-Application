@@ -5,7 +5,7 @@ import { useAuth } from "@/lib/auth-context";
 import AppShell from "@/components/AppShell";
 import {
   getDashboardSummary, getDashboardViews, getAlerts, getPolicyStatus, getSectors, getSections, getConfigLists,
-  resolveAlert, shiftLabels,
+  resolveAlert, shiftLabels, hiddenDashboardCards,
   DashboardSummary, DashboardViews, Alert, PolicyStatusData, DashboardFilters, CardKey, Sector, SectionItem, ListItem,
 } from "@/lib/api";
 
@@ -62,6 +62,8 @@ export default function DashboardPage() {
   const [viewTab, setViewTab] = useState<ViewTab>("current");
 
   const labels = shiftLabels(policy?.shifts);
+  // Cards an administrator has switched off in Configuration → Dashboard cards.
+  const hiddenCards = useMemo(() => hiddenDashboardCards(lists), [lists]);
   const sectorScoped = user?.role === "SECTOR_SI";
 
   const fetchData = useCallback(async () => {
@@ -77,6 +79,8 @@ export default function DashboardPage() {
       setSummary(summaryData);
       setViews(viewData);
       setAlerts(alertsData);
+      // Re-read the lists so an administrator's card changes apply on refresh.
+      getConfigLists(token).then(setLists).catch(() => null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load dashboard data");
     } finally {
@@ -252,7 +256,7 @@ export default function DashboardPage() {
       ) : (
         <>
           <div className="summary-grid">
-            {CARD_CONFIG.map(({ key, label, cls, icon, hint }) => (
+            {CARD_CONFIG.filter(({ key }) => !hiddenCards.has(key)).map(({ key, label, cls, icon, hint }) => (
               <button
                 key={key}
                 className={`summary-card ${cls}${selectedCard === key ? " selected" : ""}`}

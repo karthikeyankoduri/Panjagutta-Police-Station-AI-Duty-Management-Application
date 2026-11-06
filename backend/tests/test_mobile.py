@@ -20,7 +20,9 @@ def test_mobile_routes_are_mounted_under_api_prefix():
 
     assert ("/api/mobile/me", "GET") in mounted
     assert ("/api/mobile/diary", "GET") in mounted
-    assert ("/api/mobile/attendance", "POST") in mounted
+    # Attendance is recorded from sign-in; there is no manual submit endpoint any more.
+    assert ("/api/mobile/attendance", "GET") in mounted
+    assert ("/api/mobile/attendance", "POST") not in mounted
     assert ("/api/mobile/leave", "POST") in mounted
 
 
@@ -107,6 +109,9 @@ def test_mobile_diary_serializes_assigned_roster_and_attendance():
         submitted_at=datetime(2026, 10, 15, 14, 2, tzinfo=timezone.utc),
         is_confirmed=True,
         verified_at=datetime(2026, 10, 15, 14, 5, tzinfo=timezone.utc),
+        check_in_at=datetime(2026, 10, 15, 14, 2, tzinfo=timezone.utc),
+        check_out_at=None,
+        is_late=False,
     )
     shift = SimpleNamespace(
         shift_code=SimpleNamespace(value="B"),
@@ -138,6 +143,9 @@ def test_mobile_diary_serializes_assigned_roster_and_attendance():
         "attendance_submitted_at": "2026-10-15T14:02:00+00:00",
         "attendance_confirmed": True,
         "attendance_verified_at": "2026-10-15T14:05:00+00:00",
+        "check_in_at": "2026-10-15T14:02:00+00:00",
+        "check_out_at": None,
+        "is_late": False,
     }]
 
 

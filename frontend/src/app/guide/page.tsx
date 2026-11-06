@@ -25,10 +25,10 @@ const FLOWS: { id: string; title: string; summary: string; steps: Step[] }[] = [
   {
     id: "attendance",
     title: "2. Attendance and status",
-    summary: "Scheduled duty versus confirmed attendance, and how status is calculated.",
+    summary: "Attendance is recorded automatically when you sign in and out, and how status is calculated.",
     steps: [
-      { who: "Staff", what: "Submit attendance for today's published duty (web or Android).", where: { href: "/attendance", label: "Attendance" } },
-      { who: "Sector SI / Admin SI / SHO", what: "Verify submitted attendance, or run roll-call.", where: { href: "/attendance", label: "Attendance → Scheduled vs Confirmed" } },
+      { who: "Everyone with a staff record", what: "Sign in (web or Android). Every sign-in marks you Present. If you are rostered for the shift, a sign-in more than 15 minutes after its start is flagged Late. Sign out when you finish. There is nothing to mark by hand.", where: { href: "/attendance", label: "Attendance" } },
+      { who: "Sector SI / Admin SI / SHO", what: "Review who has signed in, who is late and who is scheduled but not signed in. This view is read-only.", where: { href: "/attendance", label: "Attendance → Scheduled vs Signed in" } },
       { who: "System", what: "Each person gets one current status: On Leave → Attached → Duty Off/Rest → Official Movement → assigned duty → Present-Available → Absent." },
       { who: "Officers", what: "Monitor the dashboard cards, current shift, rest and vacancy views. Click a card to see who is in it.", where: { href: "/dashboard", label: "Dashboard" } },
     ],

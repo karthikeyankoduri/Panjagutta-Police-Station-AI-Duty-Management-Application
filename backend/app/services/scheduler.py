@@ -127,6 +127,12 @@ async def check_stalled_approvals(db) -> int:
     return raised
 
 
+async def close_idle_sessions(db) -> int:
+    """Sign out abandoned sessions and stamp their last activity as the attendance check-out."""
+    from app.services.attendance_auto import expire_idle_sessions
+    return await expire_idle_sessions(db)
+
+
 async def _run(session_factory, job, label: str):
     async with session_factory() as db:
         try:
@@ -147,5 +153,8 @@ def start_scheduler(session_factory):
                       args=[session_factory, check_overdue_tasks, "overdue tasks"])
     scheduler.add_job(_run, "interval", hours=1, id="check_stalled_approvals", replace_existing=True,
                       args=[session_factory, check_stalled_approvals, "stalled approvals"])
+    scheduler.add_job(_run, "interval", minutes=5, id="close_idle_sessions", replace_existing=True,
+                      args=[session_factory, close_idle_sessions, "idle sessions"])
     scheduler.start()
-    logger.info("APScheduler started: overdue movements/tasks every 15 min, stalled approvals hourly")
+    logger.info("APScheduler started: overdue movements/tasks every 15 min, idle sessions every 5 min, "
+                "stalled approvals hourly")
