@@ -27,7 +27,6 @@ const ADMINS = ["SHO", "ADMIN_SI", "SUPER_ADMIN"];
 // this menu only hides what a role cannot use.
 const NAV_ITEMS: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: "📊", roles: OFFICERS },
-  { href: "/staff", label: "Staff & CSV Import", icon: "👥", roles: ADMINS },
   { href: "/roster", label: "Roster & Duty", icon: "📋" },
   { href: "/attendance", label: "Attendance", icon: "✅" },
   { href: "/tasks", label: "Tasks", icon: "📌" },
@@ -37,7 +36,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/approvals", label: "Approvals & Alerts", icon: "🔔", roles: OFFICERS },
   { href: "/reports", label: "Reports", icon: "📄", roles: OFFICERS },
   { href: "/policy", label: "Policy & Shifts", icon: "⚙️", roles: ADMINS },
-  { href: "/config", label: "Configuration", icon: "🧩", roles: ADMINS },
+  { href: "/config", label: "Administration", icon: "🧩", roles: ADMINS },
   { href: "/audit", label: "Audit Log", icon: "🔒", roles: ADMINS },
   { href: "/guide", label: "Workflow Guide", icon: "📘" },
 ];

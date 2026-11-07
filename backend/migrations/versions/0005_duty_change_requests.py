@@ -46,3 +46,4 @@ def downgrade():
     op.drop_index("ix_dcr_roster_id", table_name="duty_change_requests")
     op.drop_index("ix_dcr_staff_id", table_name="duty_change_requests")
     op.drop_table("duty_change_requests")
+

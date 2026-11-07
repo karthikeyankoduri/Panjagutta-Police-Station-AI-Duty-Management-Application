@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import AppShell from "@/components/AppShell";
+import StaffPanel from "@/components/StaffPanel";
 import { useAuth } from "@/lib/auth-context";
 import {
   getDuties, updateDuty, createDuty, getSectors, saveSector, getSections, saveSection,
@@ -9,7 +10,7 @@ import {
   DutyItem, Sector, SectionItem, ListItem,
 } from "@/lib/api";
 
-type Tab = "duties" | "sectors" | "sections" | "lists" | "cards";
+type Tab = "staff" | "duties" | "sectors" | "sections" | "lists" | "cards";
 const DESIGNATIONS = ["INSPECTOR", "SI", "WSI", "ASI", "AWSI", "HC", "WHC", "PC", "WPC", "ARPC", "ARWPC", "HGS", "WHGS", "SPO"];
 const LIST_TITLES: Record<string, string> = {
   staff_status: "Staff statuses", leave_status: "Leave states", task_status: "Task states",
@@ -18,7 +19,7 @@ const LIST_TITLES: Record<string, string> = {
 
 export default function ConfigPage() {
   const { token } = useAuth();
-  const [tab, setTab] = useState<Tab>("duties");
+  const [tab, setTab] = useState<Tab>("staff");
   const [duties, setDuties] = useState<DutyItem[]>([]);
   const [sectors, setSectors] = useState<Sector[]>([]);
   const [sections, setSections] = useState<SectionItem[]>([]);
@@ -40,6 +41,10 @@ export default function ConfigPage() {
   }, [token]);
 
   useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const t = new URLSearchParams(window.location.search).get("tab");
+    if (t && ["staff", "duties", "sectors", "sections", "lists", "cards"].includes(t)) setTab(t as Tab);
+  }, []);
 
   const run = async (fn: () => Promise<any>, ok: string) => {
     try {
@@ -51,13 +56,13 @@ export default function ConfigPage() {
     }
   };
 
-  const tabs: [Tab, string][] = [["duties", "Duty requirements"], ["sectors", "Sectors"], ["sections", "Sections"], ["lists", "Status & state lists"], ["cards", "Dashboard cards"]];
+  const tabs: [Tab, string][] = [["staff", "Staff & CSV Import"], ["duties", "Duty requirements"], ["sectors", "Sectors"], ["sections", "Sections"], ["lists", "Status & state lists"], ["cards", "Dashboard cards"]];
 
   return (
     <AppShell>
       <div className="page-header">
         <div>
-          <h1 className="page-title">Station Configuration</h1>
+          <h1 className="page-title">Administration</h1>
           <div className="page-subtitle">
             Every value here is stored in the database and editable by the SHO / Admin SI; every change is audited.
             Shift timings and rotation rules are on <Link href="/policy">Policy &amp; Shifts</Link>.
@@ -71,6 +76,8 @@ export default function ConfigPage() {
           <button key={k} role="tab" aria-selected={tab === k} className={`btn btn-sm ${tab === k ? "btn-primary" : "btn-secondary"}`} onClick={() => setTab(k)}>{label}</button>
         ))}
       </div>
+
+      {tab === "staff" && <StaffPanel />}
 
       {tab === "duties" && (
         <div className="card">

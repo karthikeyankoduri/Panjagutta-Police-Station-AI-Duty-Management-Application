@@ -62,7 +62,7 @@ export default function DashboardPage() {
   const [viewTab, setViewTab] = useState<ViewTab>("current");
 
   const labels = shiftLabels(policy?.shifts);
-  // Cards an administrator has switched off in Configuration → Dashboard cards.
+  // Cards an administrator has switched off in Administration → Dashboard cards.
   const hiddenCards = useMemo(() => hiddenDashboardCards(lists), [lists]);
   const sectorScoped = user?.role === "SECTOR_SI";
 
@@ -183,7 +183,7 @@ export default function DashboardPage() {
             <div style={{ fontSize: 13, color: "#bfdbfe", marginTop: 4 }}>Import the station staff register and provision logins via CSV import.</div>
           </div>
           {user && ["SHO", "ADMIN_SI", "SUPER_ADMIN"].includes(user.role) && (
-            <Link href="/staff" className="btn btn-secondary btn-lg" style={{ background: "#ffffff", color: "#1e3a8a", fontWeight: 700, border: "none" }} id="btn-go-to-csv-import">
+            <Link href="/config?tab=staff" className="btn btn-secondary btn-lg" style={{ background: "#ffffff", color: "#1e3a8a", fontWeight: 700, border: "none" }} id="btn-go-to-csv-import">
               👥 Go to Staff &amp; CSV Import →
             </Link>
           )}
