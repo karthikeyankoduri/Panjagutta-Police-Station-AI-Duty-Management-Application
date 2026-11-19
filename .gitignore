@@ -68,3 +68,8 @@ mobile-android/mobile-android/
 mobile-android/.artifacts/
 mobile-android/app/build/
 backend/generated_reports/
+
+# Local artifacts
+*.log
+*.db.bak
+/Microsoft/
