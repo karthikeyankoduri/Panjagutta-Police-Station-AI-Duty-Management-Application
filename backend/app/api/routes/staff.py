@@ -14,7 +14,7 @@ import io
 import logging
 import os
 import re
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 from typing import List, Optional
 
 logger = logging.getLogger(__name__)
@@ -26,14 +26,13 @@ from sqlalchemy import and_, delete, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.auth.dependencies import can_view_contact, get_current_user, require_roles
+from app.auth.dependencies import can_view_contact, get_current_user, has_role, require_roles
 from app.auth.jwt import hash_password
 from app.db.database import get_db
 from app.models.models import (
-    Attendance,
-    ShiftCode,
     Sector,
     Staff,
+    StaffLocation,
     StaffCategory,
     StaffDesignation,
     User,
@@ -41,6 +40,7 @@ from app.models.models import (
     UserSession,
 )
 from app.services.audit import AuditAction, log_event
+from app.services.usernames import generate_usernames, username_for
 
 router = APIRouter(prefix="/staff", tags=["Staff Register"])
 
@@ -100,6 +100,11 @@ class StaffOut(BaseModel):
     user_id: Optional[int] = None
     user_username: Optional[str] = None
     user_role: Optional[str] = None
+    # Live GPS (only populated for Admin / Super Admin viewers)
+    location_name: Optional[str] = None
+    location_lat: Optional[float] = None
+    location_lng: Optional[float] = None
+    location_updated: Optional[datetime] = None
 
     class Config:
         from_attributes = True
@@ -159,10 +164,18 @@ async def list_staff(
     if attached is not None:
         staff_items = [s for s in staff_items if (s.id in attachments) == attached]
 
+    locations = {}
+    if has_role(current_user, [UserRoleEnum.ADMIN_SI]):
+        loc_rows = (await db.execute(select(StaffLocation).where(
+            StaffLocation.staff_id.in_([s.id for s in staff_items] or [-1])
+        ))).scalars().all()
+        locations = {l.staff_id: l for l in loc_rows}
+
     out = []
     for s in staff_items:
         u = s.user
         att = attachments.get(s.id)
+        loc = locations.get(s.id)
         out.append(
             StaffOut(
                 id=s.id,
@@ -184,6 +197,10 @@ async def list_staff(
                 user_id=u.id if u else None,
                 user_username=u.username if u else None,
                 user_role=u.role.value if (u and hasattr(u.role, "value")) else None,
+                location_name=loc.location_name if loc else None,
+                location_lat=loc.latitude if loc else None,
+                location_lng=loc.longitude if loc else None,
+                location_updated=loc.recorded_at if loc else None,
             )
         )
     return out
@@ -192,7 +209,7 @@ async def list_staff(
 @router.post("/", response_model=StaffOut, status_code=status.HTTP_201_CREATED)
 async def create_staff(
     payload: StaffCreate,
-    current_user: User = Depends(require_roles(UserRoleEnum.SHO, UserRoleEnum.ADMIN_SI)),
+    current_user: User = Depends(require_roles(UserRoleEnum.ADMIN_SI)),
     db: AsyncSession = Depends(get_db),
 ):
     existing = await db.execute(select(Staff).where(Staff.service_number == payload.service_number))
@@ -205,10 +222,12 @@ async def create_staff(
     await db.flush()
 
     user_obj = None
+    if payload.create_user and not (payload.username or "").strip():
+        payload.username = await suggest_username(db, payload.designation, payload.contact_phone)             or payload.service_number.strip().lower().replace("-", "_")
     if payload.create_user and payload.username:
         user_obj = User(
-            username=payload.username,
-            hashed_password=hash_password(payload.password or "Password@PJ2024!"),
+            username=payload.username.strip().lower(),
+            hashed_password=hash_password(payload.password or "PJ@2024"),
             role=payload.role or UserRoleEnum.STAFF,
             sector_id=staff.sector_id,
             staff_id=staff.id,
@@ -252,7 +271,7 @@ async def create_staff(
 async def update_staff(
     staff_id: int,
     payload: StaffUpdate,
-    current_user: User = Depends(require_roles(UserRoleEnum.SHO, UserRoleEnum.ADMIN_SI)),
+    current_user: User = Depends(require_roles(UserRoleEnum.ADMIN_SI)),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -308,8 +327,8 @@ async def update_staff(
 
     # If user doesn't exist yet and username or role or password provided, create it
     if not user_obj and (payload.user_username or payload.user_role or payload.reset_password):
-        uname = (payload.user_username or staff.service_number).strip().lower().replace("-", "_")
-        pwd = payload.reset_password or "Password@PJ2024!"
+        uname = (payload.user_username or "").strip().lower()             or await suggest_username(db, staff.designation, staff.contact_phone)             or staff.service_number.strip().lower().replace("-", "_")
+        pwd = payload.reset_password or "PJ@2024"
         role = payload.user_role or UserRoleEnum.STAFF
         user_obj = User(
             username=uname,
@@ -404,40 +423,33 @@ async def download_template_csv():
 
 @router.post("/clear-demo-data")
 async def clear_demo_data(
-    current_user: User = Depends(require_roles(UserRoleEnum.SHO, UserRoleEnum.ADMIN_SI)),
+    current_user: User = Depends(require_roles(UserRoleEnum.ADMIN_SI)),
     db: AsyncSession = Depends(get_db),
 ):
     """
     Clears all demo operational records, staff profiles, and other demo users,
     retaining only the active administrator who performs the action.
     """
-    # 1. Clear operational tables with FK dependencies
+    # 1. Clear every operational table (children before parents). Each delete runs in its own
+    #    savepoint and any failure aborts the whole wipe, so it can never silently leave data behind.
     for tbl in [
-        "alerts", "audit_log", "attachment_orders", "movements",
-        "leave_requests", "tasks", "attendance", "roster_assignments",
-        "rosters",
+        "duty_change_requests", "alerts", "notifications", "audit_log", "attachment_orders",
+        "movements", "leave_requests", "tasks", "attendance", "roster_assignments", "rosters",
     ]:
         try:
-            await db.execute(text(f'DELETE FROM "{tbl}"'))
-        except Exception:
-            pass
+            async with db.begin_nested():
+                await db.execute(text(f'DELETE FROM "{tbl}"'))
+        except Exception as exc:
+            await db.rollback()
+            raise HTTPException(status_code=500, detail=f"Wipe aborted: could not clear '{tbl}' ({exc.__class__.__name__}). Nothing was changed.")
 
     # 2. Nullify user references in static configs
-    try:
-        await db.execute(text('UPDATE rotation_rules SET confirmed_by_id = NULL'))
-    except Exception:
-        pass
-    try:
-        await db.execute(text('UPDATE shift_config SET modified_by_id = NULL'))
-    except Exception:
-        pass
+    await db.execute(text('UPDATE rotation_rules SET confirmed_by_id = NULL'))
+    await db.execute(text('UPDATE shift_config SET modified_by_id = NULL'))
 
     # 3. Unlink staff references in users and self-references in staff
-    try:
-        await db.execute(text('UPDATE users SET staff_id = NULL'))
-        await db.execute(text('UPDATE staff SET reporting_officer_id = NULL'))
-    except Exception:
-        pass
+    await db.execute(text('UPDATE users SET staff_id = NULL'))
+    await db.execute(text('UPDATE staff SET reporting_officer_id = NULL'))
 
     # 4. Delete non-admin sessions and non-admin users
     await db.execute(delete(UserSession).where(UserSession.user_id != current_user.id))
@@ -687,12 +699,290 @@ def find_email_val(clean_dict, row_cells):
     return em
 
 
+class UsernameChange(BaseModel):
+    user_id: int
+    new_username: str
+
+
+class UsernameApply(BaseModel):
+    changes: List[UsernameChange]
+
+
+async def suggest_username(db: AsyncSession, designation, phone, exclude_user_id: Optional[int] = None) -> Optional[str]:
+    """Next free pg+designation+last-4 name for one person, or None when the phone is unusable."""
+    stmt = select(User.username)
+    if exclude_user_id:
+        stmt = stmt.where(User.id != exclude_user_id)
+    taken = [u for (u,) in (await db.execute(stmt)).all()]
+    out = generate_usernames([("one", designation, phone)], taken)
+    return out["one"][0]
+
+
+@router.get("/username-suggestion")
+async def username_suggestion(
+    designation: StaffDesignation,
+    phone: Optional[str] = None,
+    exclude_user_id: Optional[int] = None,
+    current_user: User = Depends(require_roles(UserRoleEnum.ADMIN_SI)),
+    db: AsyncSession = Depends(get_db),
+):
+    """Suggested login name for the add/edit staff forms (pg + designation + last 4 phone digits)."""
+    return {"username": await suggest_username(db, designation, phone, exclude_user_id)}
+
+
+@router.post("/usernames/preview")
+async def usernames_preview(
+    current_user: User = Depends(require_roles(UserRoleEnum.ADMIN_SI)),
+    db: AsyncSession = Depends(get_db),
+):
+    """Review-only: what every existing staff login would be renamed to. Nothing is saved."""
+    res = await db.execute(
+        select(User, Staff).join(Staff, User.staff_id == Staff.id).order_by(Staff.id)
+    )
+    pairs = [(u, st) for u, st in res.all() if u.role != UserRoleEnum.SUPER_ADMIN]
+    convertible_ids = {u.id for u, st in pairs if len("".join(ch for ch in (st.contact_phone or "") if ch.isdigit())) >= 4}
+    all_users = (await db.execute(select(User.id, User.username))).all()
+    taken = [name for uid, name in all_users if uid not in convertible_ids]
+    plan = generate_usernames(
+        [(u.id, st.designation, st.contact_phone) for u, st in pairs if u.id in convertible_ids], taken
+    )
+    rows = []
+    for u, st in pairs:
+        new_name, note = plan.get(u.id, (None, "no-phone"))
+        rows.append({
+            "user_id": u.id,
+            "staff_id": st.id,
+            "name": st.name,
+            "designation": st.designation.value if hasattr(st.designation, "value") else str(st.designation),
+            "phone": st.contact_phone,
+            "current_username": u.username,
+            "new_username": new_name,
+            "note": note,
+            "current_service_number": st.service_number,
+            "will_change": bool(new_name) and (new_name != u.username or new_name != st.service_number),
+        })
+    return {
+        "rows": rows,
+        "will_change": sum(1 for r in rows if r["will_change"]),
+        "skipped_no_phone": sum(1 for r in rows if r["note"] == "no-phone"),
+    }
+
+
+@router.post("/usernames/apply")
+async def usernames_apply(
+    payload: UsernameApply,
+    current_user: User = Depends(require_roles(UserRoleEnum.ADMIN_SI)),
+    db: AsyncSession = Depends(get_db),
+):
+    """Apply the reviewed renames. Every change is re-checked for uniqueness and written to the audit log."""
+    wanted = {c.user_id: c.new_username.strip().lower() for c in payload.changes if c.new_username.strip()}
+    if not wanted:
+        raise HTTPException(status_code=400, detail="No username changes supplied.")
+    if len(set(wanted.values())) != len(wanted):
+        raise HTTPException(status_code=400, detail="Two accounts were given the same username.")
+    users = {u.id: u for u in (await db.execute(select(User).where(User.id.in_(list(wanted))))).scalars().all()}
+    others = {
+        name.lower() for uid, name in (await db.execute(select(User.id, User.username))).all()
+        if uid not in wanted
+    }
+    clash = sorted(n for n in wanted.values() if n in others)
+    if clash:
+        raise HTTPException(status_code=409, detail=f"Already in use by another account: {', '.join(clash)}")
+    sheet = []
+    for uid, new_name in wanted.items():
+        user = users.get(uid)
+        if not user:
+            continue
+        old = user.username
+        staff = (await db.execute(select(Staff).where(Staff.id == user.staff_id))).scalar_one_or_none()
+        svc_changed = False
+        if staff and staff.service_number != new_name:
+            taken_svc = (await db.execute(
+                select(Staff.id).where(Staff.service_number == new_name, Staff.id != staff.id)
+            )).first()
+            if taken_svc is None:
+                staff.notes = with_pg_id(staff.notes, staff.service_number, new_name)
+                staff.service_number = new_name
+                svc_changed = True
+        if old == new_name and not svc_changed:
+            continue
+        user.username = new_name
+        await log_event(
+            db, actor=current_user, action="USERNAME_CHANGED", entity_type="User", entity_id=user.id,
+            old_values={"username": old}, new_values={"username": new_name},
+        )
+        sheet.append({"name": staff.name if staff else "", "old_username": old, "new_username": new_name})
+    await db.commit()
+    return {"changed": len(sheet), "credentials": sheet}
+
+
+async def plan_row_usernames(db: AsyncSession, entries):
+    """
+    entries: (key, service_number, designation, phone, explicit_username) per file row.
+    Returns {key: (username or None, note)}; note is "file", "existing", "clash", "no-phone" or "".
+    Existing accounts keep their name (never renamed); only new accounts get a generated one.
+    """
+    res = await db.execute(
+        select(User.username, Staff.service_number, Staff.notes).select_from(User).outerjoin(Staff, User.staff_id == Staff.id)
+    )
+    rows_ = res.all()
+    taken = {(u or "").lower() for u, _, _ in rows_}
+    existing_by_svc = {}
+    for u, svc, notes in rows_:
+        if svc:
+            existing_by_svc[svc] = u
+        m = re.search(r"PG ID: (\S+)", notes or "")
+        if m:
+            existing_by_svc[m.group(1).lower()] = u
+    out = {}
+    need = []
+    for key, svc, desig, phone, explicit in entries:
+        if explicit and explicit.strip():
+            name = explicit.strip().lower()
+            out[key] = (name, "file")
+            taken.add(name)
+        elif svc in existing_by_svc:
+            out[key] = (existing_by_svc[svc], "existing")
+        else:
+            need.append((key, desig, phone))
+    out.update(generate_usernames(need, taken))
+    return out
+
+
+def service_number_for(svc: str, uname: Optional[str]) -> str:
+    """Service number shown in the register: the login name when one was generated or chosen, else the PG ID."""
+    if uname and uname != svc.replace("-", "_").lower():
+        return uname
+    return svc
+
+
+def with_pg_id(notes: Optional[str], pg_id: str, service_number: str) -> Optional[str]:
+    """Keep the original PG ID in the notes once the service number is replaced, so re-imports still match."""
+    if pg_id == service_number or "PG ID: " in (notes or ""):
+        return notes
+    return f"{notes} | PG ID: {pg_id}" if notes else f"PG ID: {pg_id}"
+
+
+def map_designation(rank_str: str) -> StaffDesignation:
+    """Map a free-text rank from a roster file to the StaffDesignation enum."""
+    if "AWSI" in rank_str or "WASI" in rank_str or "WOMEN ASSISTANT" in rank_str:
+        return StaffDesignation.AWSI
+    elif "ASI" in rank_str or "ASSISTANT" in rank_str or "ASST" in rank_str:
+        return StaffDesignation.ASI
+    elif "WSI" in rank_str or "WOMEN SUB" in rank_str or "WOMEN SI" in rank_str:
+        return StaffDesignation.WSI
+    elif (
+        "SUB-INSP" in rank_str
+        or "SUB INSP" in rank_str
+        or "SUBINSP" in rank_str
+        or "PSI" in rank_str
+        or rank_str == "SI"
+        or rank_str.startswith("SI ")
+        or rank_str.endswith(" SI")
+    ):
+        return StaffDesignation.SI
+    elif any(x in rank_str for x in ["INSP", "SHO", "CI", "CIR"]):
+        return StaffDesignation.INSPECTOR
+    elif "ARWPC" in rank_str:
+        return StaffDesignation.ARWPC
+    elif "ARPC" in rank_str or "ARMED" in rank_str:
+        return StaffDesignation.ARPC
+    elif "WHC" in rank_str or "WOMEN HEAD" in rank_str or "WOMAN HEAD" in rank_str:
+        return StaffDesignation.WHC
+    elif "HC" in rank_str or "HEAD" in rank_str:
+        return StaffDesignation.HC
+    elif "WPC" in rank_str or "WOMEN PC" in rank_str or "WOMAN PC" in rank_str or "WOMEN POLICE" in rank_str:
+        return StaffDesignation.WPC
+    elif "WHGS" in rank_str or "WOMEN HG" in rank_str or "WHG" in rank_str:
+        return StaffDesignation.WHGS
+    elif "HGS" in rank_str or "HOME" in rank_str or "HG" in rank_str:
+        return StaffDesignation.HGS
+    elif "SPO" in rank_str or "SPECIAL" in rank_str:
+        return StaffDesignation.SPO
+    else:
+        return StaffDesignation.PC
+
+
+@router.post("/import-preview")
+async def import_staff_preview(
+    file: UploadFile = File(...),
+    current_user: User = Depends(require_roles(UserRoleEnum.ADMIN_SI)),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Read an uploaded CSV / Excel file into an editable grid WITHOUT saving anything.
+    Uses the same header-row and sheet detection as the importer, so what the admin edits
+    is what /import-csv will receive (as CSV) when they confirm.
+    """
+    content = await file.read()
+    filename = (file.filename or "").lower()
+    if not content:
+        raise HTTPException(status_code=400, detail="The uploaded file is empty.")
+
+    try:
+        if filename.endswith((".xlsx", ".xls")) or content.startswith(b"PK"):
+            import openpyxl
+            wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+            best = None
+            for ws in wb.worksheets:
+                result = find_header_row_and_data_from_rows(list(ws.iter_rows(values_only=True)))
+                if best is None or result[3] > best[3]:
+                    best = result
+            if best is None:
+                raise ValueError("The workbook has no sheets.")
+            _, headers, data_rows, _ = best
+        else:
+            text_data = ""
+            for enc in ("utf-8-sig", "utf-8", "latin-1", "cp1252"):
+                try:
+                    text_data = content.decode(enc)
+                    break
+                except UnicodeDecodeError:
+                    continue
+            _, headers, data_rows, _ = find_header_row_and_data_from_rows(
+                list(csv.reader(io.StringIO(text_data, newline=None)))
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Could not read the file: {exc}")
+
+    rows = [[format_cell_val(c) for c in row] for row in data_rows
+            if any(str(c).strip() for c in row if c is not None)]
+    if not headers or not rows:
+        raise HTTPException(status_code=400, detail="No header row and data rows were found in the file.")
+    width = max(len(headers), *(len(r) for r in rows))
+    headers = [str(h).strip() for h in headers] + [""] * (width - len(headers))
+    rows = [r + [""] * (width - len(r)) for r in rows]
+    clean_headers = [re.sub(r"[^a-z0-9]", "", h.lower()) for h in headers]
+    has_username_col = any(h in ("username", "user") for h in clean_headers)
+    entries = []
+    for i, row in enumerate(rows):
+        clean = {clean_headers[j]: str(row[j]).strip() for j in range(len(headers)) if clean_headers[j]}
+        _, svc = find_sno_and_pg_id_val(clean, row, i + 2)
+        desig = map_designation(find_rank_val(clean, row).upper().strip())
+        personal, dept = find_phone_val(clean, row)
+        explicit = clean.get("username") or clean.get("user") or ""
+        entries.append((i, svc, desig, personal or dept or None, explicit))
+    planned = await plan_row_usernames(db, entries)
+    username_notes = [planned[i][1] for i in range(len(rows))]
+    if not has_username_col:
+        headers = headers + ["Username"]
+        rows = [r + [planned[i][0] or ""] for i, r in enumerate(rows)]
+    else:
+        col = next(j for j, h in enumerate(clean_headers) if h in ("username", "user"))
+        for i, r in enumerate(rows):
+            if not str(r[col]).strip():
+                r[col] = planned[i][0] or ""
+    return {"headers": headers, "rows": rows, "row_count": len(rows), "username_notes": username_notes}
+
+
 @router.post("/import-csv")
 async def import_staff_csv(
     request: Request,
     file: Optional[UploadFile] = File(None),
     payload: Optional[CsvImportPayload] = None,
-    current_user: User = Depends(require_roles(UserRoleEnum.SHO, UserRoleEnum.ADMIN_SI)),
+    current_user: User = Depends(require_roles(UserRoleEnum.ADMIN_SI)),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -845,7 +1135,23 @@ async def import_staff_csv(
         sector_map[s.code.lower()] = s.id
         sector_map[s.name.lower()] = s.id
 
-    default_pwd_hash = hash_password("Password@PJ2024!")
+    default_pwd_hash = hash_password("PJ@2024")
+
+    # Login names: pg + designation + last 4 phone digits, with clashes resolved across the whole file.
+    name_entries = []
+    for _idx, _r in enumerate(rows, start=2):
+        _cells = _r.get("__raw_cells__", ())
+        _clean = {
+            re.sub(r'[^a-z0-9]', '', str(k).lower()): (str(v).strip() if v is not None else "")
+            for k, v in _r.items() if k and k != "__raw_cells__"
+        }
+        if not find_name_val(_clean, _cells):
+            continue
+        _, _svc = find_sno_and_pg_id_val(_clean, _cells, _idx)
+        _desig = map_designation(find_rank_val(_clean, _cells).upper().strip())
+        _pm, _dn = find_phone_val(_clean, _cells)
+        name_entries.append((_idx, _svc, _desig, _pm or _dn or None, get_field_val(_clean, "username", "user")))
+    planned_usernames = await plan_row_usernames(db, name_entries)
 
     imported_new_count = 0
     updated_staff_count = 0
@@ -875,42 +1181,7 @@ async def import_staff_csv(
         rank_raw = find_rank_val(clean_dict, raw_cells)
         rank_str = rank_raw.upper().strip()
 
-        if "AWSI" in rank_str or "WASI" in rank_str or "WOMEN ASSISTANT" in rank_str:
-            desig = StaffDesignation.AWSI
-        elif "ASI" in rank_str or "ASSISTANT" in rank_str or "ASST" in rank_str:
-            desig = StaffDesignation.ASI
-        elif "WSI" in rank_str or "WOMEN SUB" in rank_str or "WOMEN SI" in rank_str:
-            desig = StaffDesignation.WSI
-        elif (
-            "SUB-INSP" in rank_str
-            or "SUB INSP" in rank_str
-            or "SUBINSP" in rank_str
-            or "PSI" in rank_str
-            or rank_str == "SI"
-            or rank_str.startswith("SI ")
-            or rank_str.endswith(" SI")
-        ):
-            desig = StaffDesignation.SI
-        elif any(x in rank_str for x in ["INSP", "SHO", "CI", "CIR"]):
-            desig = StaffDesignation.INSPECTOR
-        elif "ARWPC" in rank_str:
-            desig = StaffDesignation.ARWPC
-        elif "ARPC" in rank_str or "ARMED" in rank_str:
-            desig = StaffDesignation.ARPC
-        elif "WHC" in rank_str or "WOMEN HEAD" in rank_str or "WOMAN HEAD" in rank_str:
-            desig = StaffDesignation.WHC
-        elif "HC" in rank_str or "HEAD" in rank_str:
-            desig = StaffDesignation.HC
-        elif "WPC" in rank_str or "WOMEN PC" in rank_str or "WOMAN PC" in rank_str or "WOMEN POLICE" in rank_str:
-            desig = StaffDesignation.WPC
-        elif "WHGS" in rank_str or "WOMEN HG" in rank_str or "WHG" in rank_str:
-            desig = StaffDesignation.WHGS
-        elif "HGS" in rank_str or "HOME" in rank_str or "HG" in rank_str:
-            desig = StaffDesignation.HGS
-        elif "SPO" in rank_str or "SPECIAL" in rank_str:
-            desig = StaffDesignation.SPO
-        else:
-            desig = StaffDesignation.PC
+        desig = map_designation(rank_str)
 
         # 4. Sector & Section
         sector_val = get_field_val(clean_dict, "sector", "sectorid")
@@ -998,8 +1269,19 @@ async def import_staff_csv(
         try:
             async with db.begin_nested():
                 # Upsert Staff
-                staff_res = await db.execute(select(Staff).where(Staff.service_number == svc))
-                staff_obj = staff_res.scalar_one_or_none()
+                uname = planned_usernames.get(row_idx, (None, ""))[0]
+                new_svc = service_number_for(svc, uname)
+                staff_res = await db.execute(
+                    select(Staff).where(or_(Staff.service_number == svc, Staff.service_number == new_svc,
+                                            Staff.notes.ilike(f"%PG ID: {svc}%")))
+                )
+                staff_obj = staff_res.scalars().first()
+                if new_svc != svc:
+                    notes_val = with_pg_id(notes_val, svc, new_svc)
+                if staff_obj and staff_obj.service_number != new_svc:
+                    clash_res = await db.execute(select(Staff.id).where(Staff.service_number == new_svc, Staff.id != staff_obj.id))
+                    if clash_res.first() is None:
+                        staff_obj.service_number = new_svc
 
                 if staff_obj:
                     staff_obj.name = name
@@ -1017,7 +1299,7 @@ async def import_staff_csv(
                     updated_staff_count += 1
                 else:
                     staff_obj = Staff(
-                        service_number=svc,
+                        service_number=new_svc,
                         name=name,
                         designation=desig,
                         category=cat,
@@ -1035,7 +1317,6 @@ async def import_staff_csv(
                 await db.flush()
 
                 # User Login Account
-                uname = get_field_val(clean_dict, "username", "user")
                 if not uname:
                     uname = svc.replace("-", "_").lower()
 
@@ -1076,7 +1357,7 @@ async def import_staff_csv(
                         role_enum = UserRoleEnum.STAFF
 
                 pwd = get_field_val(clean_dict, "password", "pwd", "loginpassword", "defaultpassword", "pin")
-                if pwd and pwd != "Password@PJ2024!":
+                if pwd and pwd != "PJ@2024":
                     pwd_hashed = hash_password(pwd)
                 else:
                     pwd_hashed = default_pwd_hash
@@ -1122,36 +1403,11 @@ async def import_staff_csv(
                     db.add(user_obj)
                     created_users_count += 1
 
-                # Record confirmed attendance for today for imported staff so dashboard and attendance stay synchronized
-                today_date = date.today()
-                now_utc = datetime.now(timezone.utc)
-                att_res = await db.execute(
-                    select(Attendance).where(
-                        Attendance.staff_id == staff_obj.id,
-                        Attendance.attendance_date == today_date,
-                        Attendance.shift_code == ShiftCode.A,
-                    )
-                )
-                existing_att = att_res.scalar_one_or_none()
-                if not existing_att:
-                    db.add(
-                        Attendance(
-                            staff_id=staff_obj.id,
-                            attendance_date=today_date,
-                            shift_code=ShiftCode.A,
-                            is_scheduled=True,
-                            is_confirmed=True,
-                            submitted_by_id=current_user.id,
-                            submitted_at=now_utc,
-                            verified_by_id=current_user.id,
-                            verified_at=now_utc,
-                        )
-                    )
-                else:
-                    existing_att.is_confirmed = True
-                    existing_att.is_scheduled = True
-                    existing_att.verified_by_id = current_user.id
-                    existing_att.verified_at = now_utc
+                # NOTE: Attendance is recorded ONLY from actual sign-in (attendance_auto.py).
+                # Importing staff via CSV must NOT fabricate confirmed attendance records —
+                # doing so would falsely mark every imported person as Present for today
+                # even if they never logged in. The dashboard and attendance screens derive
+                # presence from real check_in_at timestamps set by record_sign_in().
 
         except Exception as e:
             errors.append(f"Row {row_idx} ({name} / {svc}): {str(e)}")
@@ -1244,7 +1500,7 @@ async def get_staff(
 async def update_staff(
     staff_id: int,
     payload: StaffUpdate,
-    current_user: User = Depends(require_roles(UserRoleEnum.SHO, UserRoleEnum.ADMIN_SI)),
+    current_user: User = Depends(require_roles(UserRoleEnum.ADMIN_SI)),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
@@ -1281,7 +1537,7 @@ async def update_staff(
         elif user_username:
             new_u = User(
                 username=user_username,
-                hashed_password=hash_password(reset_password or "Password@PJ2024!"),
+                hashed_password=hash_password(reset_password or "PJ@2024"),
                 role=user_role or UserRoleEnum.STAFF,
                 staff_id=staff.id,
                 sector_id=staff.sector_id,
@@ -1331,7 +1587,7 @@ async def update_staff(
 @router.delete("/{staff_id}")
 async def deactivate_staff(
     staff_id: int,
-    current_user: User = Depends(require_roles(UserRoleEnum.SHO, UserRoleEnum.ADMIN_SI)),
+    current_user: User = Depends(require_roles(UserRoleEnum.ADMIN_SI)),
     db: AsyncSession = Depends(get_db),
 ):
     """Soft deactivation — preserves audit history."""

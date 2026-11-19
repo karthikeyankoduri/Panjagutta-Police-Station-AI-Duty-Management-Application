@@ -55,6 +55,8 @@ abstract class ModuleScreen {
     final MainActivity a;
     final String role;
     private int generation;
+    /** Set when this screen is one tab of a {@link CompositeScreen}; it then draws the host's tab strip. */
+    CompositeScreen host;
 
     ModuleScreen(MainActivity activity) {
         this.a = activity;
@@ -63,6 +65,15 @@ abstract class ModuleScreen {
 
     /** Loads fresh data and (re)draws the module. */
     abstract void show();
+
+    /** Picks which part of a multi-part screen to show (used by {@link CompositeScreen}); default none. */
+    void selectSub(int index) {
+    }
+
+    /** True while this screen (or the tabbed module that contains it) is the one on display. */
+    boolean active() {
+        return a.current == (host != null ? host : this);
+    }
 
     /** Receives the result of an activity this module started with {@link MainActivity#startForResult}. */
     void onResult(int requestCode, android.content.Intent data) {
@@ -105,7 +116,7 @@ abstract class ModuleScreen {
     }
 
     private boolean live(int mine) {
-        return mine == generation && a.current == this && a.token != null;
+        return mine == generation && active() && a.token != null;
     }
 
     /** Runs a write call, toasts the result, then reloads the module (or runs `after`). */
@@ -127,7 +138,7 @@ abstract class ModuleScreen {
                 a.mainHandler.post(() -> {
                     if (okMessage != null) a.toast(okMessage);
                     a.fetchNotifications(false);
-                    if (a.current == this && then != null) then.run(res);
+                    if (active() && then != null) then.run(res);
                 });
             } catch (Exception e) {
                 final String message = e.getMessage() == null ? "The action failed." : e.getMessage();
@@ -210,6 +221,7 @@ abstract class ModuleScreen {
     }
 
     void heading(String eyebrow, String title, String subtitle) {
+        if (host != null) host.drawTabs();
         a.addPageHeading(eyebrow, title, subtitle);
     }
 

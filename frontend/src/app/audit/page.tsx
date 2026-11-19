@@ -122,7 +122,7 @@ export default function AuditPage() {
       <div className="card">
         <div className="card__header" style={{ display: "flex", justifyContent: "space-between" }}>
           <span className="card__title">Audit Trail Records ({logs.length})</span>
-          <span style={{ fontSize: "12px", color: "#22c55e" }}>🔒 Read-Only &middot; Append-Only</span>
+          <span style={{ fontSize: "12px", color: "#22c55e" }}>Read-Only &middot; Append-Only</span>
         </div>
         <div className="card__body" style={{ padding: 0 }}>
           {loading ? (

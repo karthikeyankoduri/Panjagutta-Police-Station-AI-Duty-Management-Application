@@ -36,4 +36,11 @@ android {
 dependencies {
     implementation "androidx.swiperefreshlayout:swiperefreshlayout:1.1.0"
     testImplementation "junit:junit:4.13.2"
+    testImplementation "org.json:json:20240303"
+}
+
+// RoleAccessTest reads the shared web/app access rules. Declare the file as a test input so that
+// editing it always re-runs the test (otherwise Gradle reports the test as up to date).
+tasks.withType(Test).configureEach {
+    inputs.file("$rootDir/../frontend/src/lib/access-matrix.json").withPropertyName("accessMatrix")
 }

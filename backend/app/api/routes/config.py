@@ -13,9 +13,9 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.dependencies import STATION_ADMINS, get_current_user, require_roles
+from app.auth.dependencies import get_current_user, require_roles
 from app.db.database import get_db
-from app.models.models import ConfigListItem, Section, Sector, Staff, User
+from app.models.models import ConfigListItem, Section, Sector, Staff, User, UserRoleEnum
 from app.services.audit import AuditAction, log_event
 
 router = APIRouter(prefix="/config", tags=["Configuration"])
@@ -101,7 +101,7 @@ async def list_sectors(current_user: User = Depends(get_current_user), db: Async
 
 
 @router.post("/sectors", status_code=201)
-async def create_sector(payload: SectorIn, current_user: User = Depends(require_roles(*STATION_ADMINS)),
+async def create_sector(payload: SectorIn, current_user: User = Depends(require_roles(UserRoleEnum.ADMIN_SI)),
                         db: AsyncSession = Depends(get_db)):
     if (await db.execute(select(Sector).where((Sector.name == payload.name) | (Sector.code == payload.code)))).scalars().first():
         raise HTTPException(status_code=409, detail="A sector with this name or code already exists")
@@ -116,7 +116,7 @@ async def create_sector(payload: SectorIn, current_user: User = Depends(require_
 
 @router.patch("/sectors/{sector_id}")
 async def update_sector(sector_id: int, payload: SectorUpdate,
-                        current_user: User = Depends(require_roles(*STATION_ADMINS)),
+                        current_user: User = Depends(require_roles(UserRoleEnum.ADMIN_SI)),
                         db: AsyncSession = Depends(get_db)):
     sector = await db.get(Sector, sector_id)
     if not sector:
@@ -140,7 +140,7 @@ async def list_sections(current_user: User = Depends(get_current_user), db: Asyn
 
 
 @router.post("/sections", status_code=201)
-async def create_section(payload: SectionIn, current_user: User = Depends(require_roles(*STATION_ADMINS)),
+async def create_section(payload: SectionIn, current_user: User = Depends(require_roles(UserRoleEnum.ADMIN_SI)),
                          db: AsyncSession = Depends(get_db)):
     if (await db.execute(select(Section).where(Section.name == payload.name))).scalars().first():
         raise HTTPException(status_code=409, detail="A section with this name already exists")
@@ -155,7 +155,7 @@ async def create_section(payload: SectionIn, current_user: User = Depends(requir
 
 @router.patch("/sections/{section_id}")
 async def update_section(section_id: int, payload: SectionUpdate,
-                         current_user: User = Depends(require_roles(*STATION_ADMINS)),
+                         current_user: User = Depends(require_roles(UserRoleEnum.ADMIN_SI)),
                          db: AsyncSession = Depends(get_db)):
     section = await db.get(Section, section_id)
     if not section:
@@ -190,7 +190,7 @@ class DashboardCardsIn(BaseModel):
 
 @router.put("/dashboard-cards")
 async def set_dashboard_cards(payload: DashboardCardsIn,
-                              current_user: User = Depends(require_roles(*STATION_ADMINS)),
+                              current_user: User = Depends(require_roles(UserRoleEnum.ADMIN_SI)),
                               db: AsyncSession = Depends(get_db)):
     """Show or hide dashboard KPI cards in one audited save (SHO, Admin SI, Super Admin)."""
     rows = {r.code: r for r in (await db.execute(
@@ -213,7 +213,7 @@ async def set_dashboard_cards(payload: DashboardCardsIn,
 
 @router.post("/lists/{list_name}", status_code=201)
 async def add_list_item(list_name: str, payload: ListItemIn,
-                        current_user: User = Depends(require_roles(*STATION_ADMINS)),
+                        current_user: User = Depends(require_roles(UserRoleEnum.ADMIN_SI)),
                         db: AsyncSession = Depends(get_db)):
     """Only free-form lists (leave types) accept new codes; status codes are fixed by the rules engine."""
     if list_name != "leave_type":
@@ -232,7 +232,7 @@ async def add_list_item(list_name: str, payload: ListItemIn,
 
 @router.patch("/lists/items/{item_id}")
 async def update_list_item(item_id: int, payload: ListItemUpdate,
-                           current_user: User = Depends(require_roles(*STATION_ADMINS)),
+                           current_user: User = Depends(require_roles(UserRoleEnum.ADMIN_SI)),
                            db: AsyncSession = Depends(get_db)):
     item = await db.get(ConfigListItem, item_id)
     if not item:

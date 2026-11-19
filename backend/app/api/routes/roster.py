@@ -377,6 +377,12 @@ async def _check_and_store(db: AsyncSession, roster: Roster, assignments: List[A
                 **result.as_dict(),
             },
         )
+    await store_assignments(db, roster, assignments, result, user)
+    return result.as_dict()
+
+
+async def store_assignments(db: AsyncSession, roster: Roster, assignments: List[AssignmentIn], result, user: User) -> None:
+    """Insert already-validated assignments and audit each authorized exception."""
     for idx, asn in enumerate(assignments):
         authorizer = result.authorizers.get(idx)
         db.add(RosterAssignment(
@@ -396,7 +402,6 @@ async def _check_and_store(db: AsyncSession, roster: Roster, assignments: List[A
                             new_values={"staff_id": asn.staff_id, "duty_master_id": asn.duty_master_id,
                                         "overridden_rules": [i["code"] for i in overridden],
                                         "details": [i["message"] for i in overridden]})
-    return result.as_dict()
 
 
 @router.post("/validate")

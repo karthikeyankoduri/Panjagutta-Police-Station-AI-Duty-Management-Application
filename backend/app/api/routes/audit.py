@@ -1,6 +1,6 @@
 """
 Audit Trail API — Immutable log of all sensitive operational actions.
-Restricted to SHO and Admin SI.
+Restricted to Admin SI (and Super Admin).
 """
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ async def list_audit_logs(
     exceptions_only: bool = Query(False),
     limit: int = Query(50, le=200),
     offset: int = Query(0, ge=0),
-    current_user: User = Depends(require_roles(UserRoleEnum.SHO, UserRoleEnum.ADMIN_SI)),
+    current_user: User = Depends(require_roles(UserRoleEnum.ADMIN_SI)),
     db: AsyncSession = Depends(get_db),
 ):
     query = select(AuditLog)

@@ -7,10 +7,17 @@ import {
   createStaff,
   updateStaff,
   importStaffCsv,
+  previewStaffImport,
+  getUsernameSuggestion,
+  previewUsernameConversion,
+  applyUsernameConversion,
+  UsernamePlanRow,
   clearDemoData,
   downloadStaffTemplate,
   getSections,
   formatApiError,
+  googleMapsUrl,
+  timeAgo,
   StaffMember,
   SectionItem,
 } from "@/lib/api";
@@ -93,7 +100,9 @@ export default function StaffPanel() {
     sector_id: "",
     section: "",
     contact_phone: "",
+    username: "",
   });
+  const [addUsernameTouched, setAddUsernameTouched] = useState(false);
   const [addFormError, setAddFormError] = useState("");
   const [addFormLoading, setAddFormLoading] = useState(false);
 
@@ -132,6 +141,23 @@ export default function StaffPanel() {
   const [importError, setImportError] = useState("");
   // Editable preview of a CSV before it is imported (row 0 = header). null for Excel files.
   const [previewRows, setPreviewRows] = useState<string[][] | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [usernameNotes, setUsernameNotes] = useState<string[]>([]);
+  const clashCount = usernameNotes.filter((n) => n === "clash").length;
+  const noPhoneCount = usernameNotes.filter((n) => n === "no-phone").length;
+
+  // Convert existing logins to pg + designation + last 4 phone digits (review, then apply)
+  const [showConvert, setShowConvert] = useState(false);
+  const [convertRows, setConvertRows] = useState<UsernamePlanRow[]>([]);
+  const [convertLoading, setConvertLoading] = useState(false);
+  const [convertError, setConvertError] = useState("");
+  const [convertSheet, setConvertSheet] = useState<{ name: string; old_username: string; new_username: string }[] | null>(null);
+  // Column holding the officer's name; a row without one is rejected by the importer.
+  const nameCol = previewRows
+    ? previewRows[0].findIndex((h) => /name/i.test(h) && !/station|division|zone|range|father|mother|user|file|unit/i.test(h))
+    : -1;
+  const rowMissingName = (r: string[]) => nameCol >= 0 && !(r[nameCol] ?? "").trim();
+  const missingNameCount = previewRows ? previewRows.slice(1).filter(rowMissingName).length : 0;
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Clear Demo Data Modal State
@@ -140,7 +166,7 @@ export default function StaffPanel() {
   const [clearError, setClearError] = useState("");
 
   const isAdminOrSho =
-    user?.role === "ADMIN_SI" || user?.role === "SHO" || user?.role === "SUPER_ADMIN";
+    user?.role === "ADMIN_SI" || user?.role === "SUPER_ADMIN";
 
   const fetchStaff = useCallback(async () => {
     if (!token) return;
@@ -169,6 +195,49 @@ export default function StaffPanel() {
     if (token) getSections(token).then(setSections);
   }, [token]);
 
+  // Add form: suggest pg + designation + last 4 phone digits until the admin types their own.
+  useEffect(() => {
+    if (!showAddModal || addUsernameTouched || !token) return;
+    const t = setTimeout(() => {
+      getUsernameSuggestion(token, addFormData.designation, addFormData.contact_phone)
+        .then((u) => setAddFormData((p) => ({ ...p, username: u || "" })))
+        .catch(() => {});
+    }, 300);
+    return () => clearTimeout(t);
+  }, [showAddModal, addUsernameTouched, token, addFormData.designation, addFormData.contact_phone]);
+
+  const openConvert = async () => {
+    setShowConvert(true);
+    setConvertError("");
+    setConvertSheet(null);
+    setConvertLoading(true);
+    try {
+      const res = await previewUsernameConversion(token!);
+      setConvertRows(res.rows);
+    } catch (e) {
+      setConvertError(formatApiError(e, "Could not build the preview"));
+    } finally {
+      setConvertLoading(false);
+    }
+  };
+
+  const applyConvert = async () => {
+    setConvertError("");
+    setConvertLoading(true);
+    try {
+      const changes = convertRows
+        .filter((r) => r.will_change && r.new_username)
+        .map((r) => ({ user_id: r.user_id, new_username: r.new_username as string }));
+      const res = await applyUsernameConversion(token!, changes);
+      setConvertSheet(res.credentials);
+      fetchStaff();
+    } catch (e) {
+      setConvertError(formatApiError(e, "Could not apply the changes"));
+    } finally {
+      setConvertLoading(false);
+    }
+  };
+
   const handleTemplateDownload = async () => {
     if (!token) return;
     try {
@@ -192,8 +261,11 @@ export default function StaffPanel() {
         sector_id: addFormData.sector_id ? parseInt(addFormData.sector_id) : undefined,
         section: addFormData.section || undefined,
         contact_phone: addFormData.contact_phone || undefined,
-      });
+        create_user: true,
+        username: addFormData.username.trim() || undefined,
+      } as Partial<StaffMember>);
       setShowAddModal(false);
+      setAddUsernameTouched(false);
       setAddFormData({
         service_number: "",
         name: "",
@@ -202,8 +274,9 @@ export default function StaffPanel() {
         sector_id: "",
         section: "",
         contact_phone: "",
+        username: "",
       });
-      setSuccessMsg("Staff member added successfully.");
+      setSuccessMsg("Staff member added successfully. Login uses the username shown, default password PJ@2024.");
       setTimeout(() => setSuccessMsg(""), 4000);
       fetchStaff();
     } catch (e) {
@@ -330,7 +403,7 @@ export default function StaffPanel() {
                 id="btn-clear-demo"
                 title="Wipe demo records and prepare station for official roster"
               >
-                🗑 Wipe Demo Data
+                Wipe Demo Data
               </button>
               <button
                 type="button"
@@ -339,7 +412,7 @@ export default function StaffPanel() {
                 id="btn-download-csv-template"
                 title="Download Official Police Proforma CSV template with unique PG IDs"
               >
-                📥 Download Proforma CSV
+                Download Proforma CSV
               </button>
               <button
                 className="btn btn-primary"
@@ -352,7 +425,15 @@ export default function StaffPanel() {
                 }}
                 id="btn-import-staff-csv"
               >
-                📂 Import Staff (CSV / Excel)
+                Import Staff (CSV / Excel)
+              </button>
+              <button
+                className="btn btn-secondary"
+                onClick={openConvert}
+                id="btn-convert-usernames"
+                title="Rename existing logins to pg + designation + last 4 phone digits (review first)"
+              >
+                Convert Usernames
               </button>
             </>
           )}
@@ -515,7 +596,6 @@ export default function StaffPanel() {
         </div>
       ) : staff.length === 0 ? (
         <div className="empty-state" style={{ padding: "48px 24px", textAlign: "center" }}>
-          <div className="empty-state__icon" style={{ fontSize: 48, marginBottom: 12 }}>👥</div>
           <h3 className="empty-state__title" style={{ fontSize: 18, marginBottom: 8 }}>No Staff Found in Station Register</h3>
           <p className="empty-state__text" style={{ maxWidth: 500, margin: "0 auto 20px", color: "var(--color-muted)" }}>
             The station staff register is currently empty or matches no filters. You can import the 140 authorized personnel CSV file or add personnel individually.
@@ -531,7 +611,7 @@ export default function StaffPanel() {
                 setImportError("");
               }}
             >
-              📂 Import 140 Personnel CSV
+              Import 140 Personnel CSV
             </button>
           )}
         </div>
@@ -548,6 +628,7 @@ export default function StaffPanel() {
                 <th>Section</th>
                 <th>Contact</th>
                 <th>Login Account & Role</th>
+                <th>Location</th>
                 <th>Status</th>
                 <th style={{ textAlign: "right" }}>Actions</th>
               </tr>
@@ -595,7 +676,7 @@ export default function StaffPanel() {
                   <td>{s.section || <span style={{ color: "var(--color-muted)" }}>General</span>}</td>
                   <td style={{ fontSize: 12 }}>
                     {s.contact_phone ? (
-                      <span>📞 {s.contact_phone}</span>
+                      <span>{s.contact_phone}</span>
                     ) : (
                       <span style={{ color: "var(--color-muted)" }}>—</span>
                     )}
@@ -611,11 +692,28 @@ export default function StaffPanel() {
                           {s.user_role || "STAFF"}
                         </span>
                         <div style={{ fontSize: 10, color: "#64748b" }} title="Initial password — the officer must set their own at first sign-in">
-                          🔑 <code>Password@PJ2024!</code> <span>(changed at first sign-in)</span>
+                          <code>PJ@2024</code> <span>(changed at first sign-in)</span>
                         </div>
                       </div>
                     ) : (
                       <span style={{ color: "var(--color-muted)", fontSize: 11 }}>No user account</span>
+                    )}
+                  </td>
+                  <td style={{ fontSize: 12, maxWidth: 220 }}>
+                    {s.location_lat != null && s.location_lng != null ? (
+                      <>
+                        <a
+                          href={googleMapsUrl(s.location_lat, s.location_lng)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title="Open in Google Maps"
+                        >
+                          {s.location_name || `${s.location_lat.toFixed(5)}, ${s.location_lng.toFixed(5)}`}
+                        </a>
+                        <div style={{ fontSize: 10, color: "#64748b" }}>Updated {timeAgo(s.location_updated)}</div>
+                      </>
+                    ) : (
+                      <span style={{ color: "var(--color-muted)" }}>Location unavailable</span>
                     )}
                   </td>
                   <td>
@@ -624,7 +722,7 @@ export default function StaffPanel() {
                     </span>
                     {s.attached_to && (
                       <div style={{ fontSize: 11, marginTop: 4 }} title={`Order ${s.attachment_order || "—"}`}>
-                        <span className="badge badge-blue">🔗 Attached</span>
+                        <span className="badge badge-blue">Attached</span>
                         <div style={{ color: "#64748b" }}>{s.attached_to}{s.attachment_until ? ` · until ${s.attachment_until}` : ""}</div>
                       </div>
                     )}
@@ -716,12 +814,19 @@ export default function StaffPanel() {
                         setImportError("");
                         setImportResult(null);
                         setPreviewRows(null);
-                        if (/\.csv$/i.test(f.name)) {
-                          f.text().then((t) => {
-                            const rows = parseCsv(t);
-                            if (rows.length > 1) setPreviewRows(rows);
-                          });
-                        }
+                        setUsernameNotes([]);
+                        setPreviewLoading(true);
+                        previewStaffImport(token!, f)
+                          .then((p) => { if (p.rows.length > 0) { setPreviewRows([p.headers, ...p.rows]); setUsernameNotes(p.username_notes || []); } })
+                          .catch(async (err) => {
+                            // Fall back to reading a CSV in the browser; Excel then imports as-is.
+                            if (/\.csv$/i.test(f.name)) {
+                              const rows = parseCsv(await f.text());
+                              if (rows.length > 1) { setPreviewRows(rows); return; }
+                            }
+                            setImportError(err instanceof Error ? err.message : "Could not preview the file.");
+                          })
+                          .finally(() => setPreviewLoading(false));
                       }
                     }}
                   />
@@ -747,7 +852,7 @@ export default function StaffPanel() {
                     S.No | Range | Zone | Division | Police Station | PG ID (e.g. pg-011) | Employee ID | Rank | General No | Employee name | Mobile no (personal) | Department No | Mother Tongue | E-mail ID
                   </div>
                   <div style={{ marginTop: 6, fontSize: 11, color: "var(--color-muted)", lineHeight: 1.5 }}>
-                    💡 <em>Note: Unique Station IDs (<code>pg-001</code>, <code>pg-011</code>, etc.) are automatically assigned. Every personnel is provisioned a login account with default password <code>Password@PJ2024!</code> (or from a &apos;Password&apos; column). Personnel can sign in using their Station ID (e.g. <code>pg-001</code>), HRMS Employee ID, or Email.</em>
+                    <em>Note: Unique Station IDs (<code>pg-001</code>, <code>pg-011</code>, etc.) are automatically assigned. Every personnel is provisioned a login account with default password <code>PJ@2024</code> (or from a &apos;Password&apos; column). Personnel sign in with their username (<code>pg</code> + designation + last 4 phone digits, e.g. <code>pgpc3210</code>), or Station ID, HRMS Employee ID or Email.</em>
                   </div>
                 </div>
 
@@ -759,6 +864,16 @@ export default function StaffPanel() {
                     <div style={{ fontSize: 11, color: "var(--color-muted)", marginBottom: 6 }}>
                       Fix any cell, remove rows you do not want, or add a row. Nothing is saved until you press Import.
                     </div>
+                    <div style={{ fontSize: 11, color: "var(--color-navy-700)", marginBottom: 6 }}>
+                      ℹ The <strong>Username</strong> column is pre-filled as <code>pg</code> + designation + last 4 phone digits (e.g. <code>pgpc3210</code>); edit it if needed.
+                      {clashCount > 0 && ` ${clashCount} had a clash and use more digits.`}
+                      {noPhoneCount > 0 && ` ${noPhoneCount} have no phone number and keep their PG-ID based login.`}
+                    </div>
+                    {missingNameCount > 0 && (
+                      <div style={{ fontSize: 11, color: "#991b1b", marginBottom: 6 }}>
+                        ⚠ {missingNameCount} row(s) have no name (highlighted) and will be skipped unless you fill the name in.
+                      </div>
+                    )}
                     <div style={{ maxHeight: 280, overflow: "auto", border: "1px solid var(--color-surface-border)", borderRadius: 6 }}>
                       <table className="table" style={{ fontSize: 11 }}>
                         <thead>
@@ -770,7 +885,7 @@ export default function StaffPanel() {
                         </thead>
                         <tbody>
                           {previewRows.slice(1).map((r, i) => (
-                            <tr key={i}>
+                            <tr key={i} style={rowMissingName(r) ? { background: "rgba(220,38,38,.08)" } : undefined}>
                               <td>{i + 1}</td>
                               {previewRows[0].map((_, c) => (
                                 <td key={c}>
@@ -796,9 +911,12 @@ export default function StaffPanel() {
                       onClick={() => setPreviewRows((p) => p && [...p, p[0].map(() => "")])}>+ Add row</button>
                   </div>
                 )}
-                {selectedFile && !previewRows && /\.xlsx?$/i.test(selectedFile.name) && (
+                {previewLoading && (
+                  <div style={{ fontSize: 11, color: "var(--color-muted)", marginBottom: 12 }}>Reading file for preview…</div>
+                )}
+                {selectedFile && !previewRows && !previewLoading && /\.xlsx?$/i.test(selectedFile.name) && (
                   <div style={{ fontSize: 11, color: "var(--color-muted)", marginBottom: 12 }}>
-                    Excel files are imported as-is. To review and edit rows first, save the sheet as CSV and upload that.
+                    The preview could not be built for this Excel file, so it will be imported as-is.
                   </div>
                 )}
 
@@ -853,10 +971,10 @@ export default function StaffPanel() {
                   <button
                     type="submit"
                     className="btn btn-primary"
-                    disabled={importLoading || !selectedFile}
+                    disabled={importLoading || previewLoading || !selectedFile}
                     id="btn-submit-csv-import"
                   >
-                    {importLoading ? "Importing Personnel..." : (previewRows ? `🚀 Import ${previewRows.length - 1} rows` : "🚀 Upload & Import File")}
+                    {importLoading ? "Importing Personnel..." : (previewRows ? `Import ${previewRows.length - 1} rows` : "Upload & Import File")}
                   </button>
                 </div>
               </form>
@@ -995,7 +1113,7 @@ export default function StaffPanel() {
                   }}
                 >
                   <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8, color: "var(--color-navy-800)" }}>
-                    🔐 Linked System Login Account
+                    Linked System Login Account
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                     <div className="form-group" style={{ marginBottom: 8 }}>
@@ -1022,6 +1140,29 @@ export default function StaffPanel() {
                         onChange={(e) => setEditFormData((p) => ({ ...p, reset_password: e.target.value }))}
                       />
                     </div>
+                  </div>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6 }}>
+                    <input
+                      className="form-input"
+                      aria-label="Login username"
+                      value={editFormData.user_username}
+                      onChange={(e) => setEditFormData((p) => ({ ...p, user_username: e.target.value }))}
+                    />
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={async () => {
+                        try {
+                          const u = await getUsernameSuggestion(token!, editFormData.designation, editFormData.contact_phone, editingStaff.user_id);
+                          if (u) setEditFormData((p) => ({ ...p, user_username: u }));
+                          else setEditFormError("Add a phone number (4+ digits) to get a suggestion.");
+                        } catch (e) {
+                          setEditFormError(formatApiError(e, "Could not suggest a username"));
+                        }
+                      }}
+                    >
+                      Use suggested
+                    </button>
                   </div>
                   {editFormData.user_username && (
                     <div style={{ fontSize: 11, color: "var(--color-muted)", marginTop: 6, display: "flex", flexDirection: "column", gap: 2 }}>
@@ -1168,6 +1309,19 @@ export default function StaffPanel() {
                     placeholder="e.g. 9849901001"
                   />
                 </div>
+                <div className="form-group">
+                  <label className="form-label" htmlFor="add-username-input">Login Username</label>
+                  <input
+                    id="add-username-input"
+                    className="form-input"
+                    value={addFormData.username}
+                    onChange={(e) => { setAddUsernameTouched(true); setAddFormData((p) => ({ ...p, username: e.target.value })); }}
+                    placeholder="pg + designation + last 4 phone digits"
+                  />
+                  <div style={{ fontSize: 11, color: "var(--color-muted)", marginTop: 4 }}>
+                    Suggested from the designation and phone number. Default password <code>PJ@2024</code>, changed at first login.
+                  </div>
+                </div>
                 {addFormError && <div className="form-error" role="alert">{addFormError}</div>}
                 <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 8 }}>
                   <button type="button" className="btn btn-secondary" onClick={() => setShowAddModal(false)}>
@@ -1178,6 +1332,96 @@ export default function StaffPanel() {
                   </button>
                 </div>
               </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── Convert usernames modal ─── */}
+      {showConvert && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.65)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
+          <div className="card" style={{ width: "100%", maxWidth: 760, maxHeight: "90vh", overflowY: "auto" }}>
+            <div className="card__header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <h2 className="card__title">Convert logins to pg + designation + last 4 phone digits</h2>
+              <button className="btn btn-secondary btn-sm" onClick={() => setShowConvert(false)}>✕</button>
+            </div>
+            <div className="card__body" style={{ padding: 20 }}>
+              {convertLoading && <div style={{ fontSize: 12 }}>Working…</div>}
+              {convertError && <div className="form-error" role="alert">{convertError}</div>}
+              {!convertSheet && !convertLoading && (
+                <>
+                  <div style={{ fontSize: 12, marginBottom: 8 }}>
+                    {convertRows.filter((r) => r.will_change).length} login(s) will change. Passwords stay the same. Accounts without a phone number keep their current username. Nothing is saved until you press Apply.
+                  </div>
+                  <div style={{ maxHeight: 320, overflow: "auto", border: "1px solid var(--color-surface-border)", borderRadius: 6 }}>
+                    <table className="table" style={{ fontSize: 11 }}>
+                      <thead><tr><th>Name</th><th>Rank</th><th>Phone</th><th>Current</th><th>New</th></tr></thead>
+                      <tbody>
+                        {convertRows.map((r) => (
+                          <tr key={r.user_id} style={r.will_change ? undefined : { opacity: 0.55 }}>
+                            <td>{r.name}</td>
+                            <td>{r.designation}</td>
+                            <td>{r.phone || "—"}</td>
+                            <td><code>{r.current_username}</code></td>
+                            <td>
+                              {r.new_username ? <code>{r.new_username}</code> : "no phone — unchanged"}
+                              {r.note === "clash" ? " (clash: more digits)" : ""}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 12 }}>
+                    <button className="btn btn-secondary" onClick={() => setShowConvert(false)}>Cancel</button>
+                    <button
+                      className="btn btn-primary"
+                      id="btn-apply-usernames"
+                      onClick={applyConvert}
+                      disabled={convertLoading || !convertRows.some((r) => r.will_change)}
+                    >
+                      Apply changes
+                    </button>
+                  </div>
+                </>
+              )}
+              {convertSheet && (
+                <>
+                  <div style={{ fontSize: 12, marginBottom: 8 }}>
+                    {convertSheet.length} login(s) changed. Give each officer their new username; their password is unchanged.
+                  </div>
+                  <div style={{ maxHeight: 320, overflow: "auto", border: "1px solid var(--color-surface-border)", borderRadius: 6 }}>
+                    <table className="table" style={{ fontSize: 11 }}>
+                      <thead><tr><th>Name</th><th>Old</th><th>New username</th></tr></thead>
+                      <tbody>
+                        {convertSheet.map((r, i) => (
+                          <tr key={i}>
+                            <td>{r.name}</td>
+                            <td><code>{r.old_username}</code></td>
+                            <td><code>{r.new_username}</code></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 12 }}>
+                    <button
+                      className="btn btn-secondary"
+                      onClick={() => {
+                        const q = (v: string) => `"${v.replace(/"/g, '""')}"`;
+                        const csv = ["Name,Old username,New username", ...convertSheet.map((r) => [r.name, r.old_username, r.new_username].map(q).join(","))].join("\n");
+                        const a = document.createElement("a");
+                        a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+                        a.download = "new_usernames.csv";
+                        a.click();
+                      }}
+                    >
+                      ⬇ Download list
+                    </button>
+                    <button className="btn btn-primary" onClick={() => setShowConvert(false)}>Done</button>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         </div>

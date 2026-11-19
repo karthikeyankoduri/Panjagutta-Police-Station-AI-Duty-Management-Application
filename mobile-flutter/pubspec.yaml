@@ -1,0 +1,23 @@
+name: dutymanagement
+description: Panjagutta Police Station Duty Management
+publish_to: none
+version: 1.0.0+2
+environment:
+  sdk: ^3.13.3
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_secure_storage: ^10.0.0
+  geolocator: ^14.0.3
+  http: ^1.6.0
+  url_launcher: ^6.3.2
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/access-matrix.json
+    - assets/login_background.jpg
+    - assets/login_police_crest.png

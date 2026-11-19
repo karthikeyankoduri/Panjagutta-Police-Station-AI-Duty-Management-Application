@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     ATTENDANCE_EARLY_SIGNIN_MINUTES: int = 60
     ATTENDANCE_LATE_GRACE_MINUTES: int = 15
 
+    # Live GPS tracking / reverse geocoding (OpenStreetMap Nominatim, free; 1 request/second policy)
+    NOMINATIM_URL: str = "https://nominatim.openstreetmap.org/reverse"
+    NOMINATIM_USER_AGENT: str = "panjagutta-duty-management/1.0 (police station duty system)"
+    LOCATION_MIN_MOVE_METERS: float = 50.0
+
     # Demo / seed
     SEED_DEMO_DATA: bool = True
     DEMO_POLICY_ENABLED: bool = True

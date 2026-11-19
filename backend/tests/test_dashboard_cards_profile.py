@@ -42,7 +42,7 @@ async def test_all_fourteen_cards_seeded_and_shown_by_default(client, users):
     assert all(cards.values())
 
 
-@pytest.mark.parametrize("who", ["sho", "admin", "super"])
+@pytest.mark.parametrize("who", ["admin", "super"])
 async def test_station_admins_can_hide_and_restore_cards(client, users, who):
     h = await login(client, users[who])
     res = await client.put("/api/config/dashboard-cards", headers=h,
@@ -68,7 +68,7 @@ async def test_other_roles_cannot_change_cards(client, users, who):
 
 
 async def test_unknown_card_is_rejected_and_nothing_changes(client, users):
-    h = await login(client, users["sho"])
+    h = await login(client, users["admin"])
     res = await client.put("/api/config/dashboard-cards", headers=h,
                            json={"cards": {"present": False, "not_a_card": False}})
     assert res.status_code == 400
@@ -76,7 +76,7 @@ async def test_unknown_card_is_rejected_and_nothing_changes(client, users):
 
 
 async def test_card_change_is_audited_and_no_change_is_not(client, users, db):
-    h = await login(client, users["sho"])
+    h = await login(client, users["admin"])
     await client.put("/api/config/dashboard-cards", headers=h, json={"cards": {"absent": False}})
     await client.put("/api/config/dashboard-cards", headers=h, json={"cards": {"absent": False}})  # no-op
     rows = (await db.execute(select(AuditLog).where(AuditLog.entity_type == "DashboardCards"))).scalars().all()

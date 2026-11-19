@@ -5,7 +5,7 @@ import { useAuth } from "@/lib/auth-context";
 import { changePassword } from "@/lib/api";
 
 function problem(pw: string, username: string): string | null {
-  if (pw.length < 10) return "At least 10 characters";
+  if (!pw) return "Enter a password";
   if (!/[A-Za-z]/.test(pw) || !/\d/.test(pw)) return "Use both letters and numbers";
   if (username && pw.toLowerCase().includes(username.toLowerCase())) return "Must not contain your username";
   return null;
@@ -48,7 +48,7 @@ export default function ChangePasswordPage() {
     <div className="login-page">
       <div className="login-card">
         <div className="login-card__logo">
-          <div style={{ fontSize: 32, marginBottom: 8 }}>🔐</div>
+          <img src="/crest.png" alt="Hyderabad City Police crest" width={64} height={74} style={{ marginBottom: 10 }} />
           <div className="login-card__station-name">Set your password</div>
           <div className="login-card__system-name">
             {user?.must_change_password ? "Required before you can continue" : "Change your password"}
@@ -63,7 +63,7 @@ export default function ChangePasswordPage() {
             <label className="form-label" htmlFor="new">New password</label>
             <input id="new" type="password" className="form-input" value={next} onChange={(e) => setNext(e.target.value)} autoComplete="new-password" aria-describedby="pw-rules" required />
             <div id="pw-rules" style={{ fontSize: 12, marginTop: 4, color: rule ? "#b45309" : "#16a34a" }}>
-              {next ? (rule ? `✗ ${rule}` : "✓ Meets the password rules") : "At least 10 characters, letters and numbers, not your username."}
+              {next ? (rule ? `✗ ${rule}` : "✓ Meets the password rules") : "Letters and numbers, not your username."}
             </div>
           </div>
           <div className="form-group">

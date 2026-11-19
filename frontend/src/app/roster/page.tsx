@@ -1,6 +1,7 @@
 "use client";
 import React, { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import AppShell from "@/components/AppShell";
+import WeeklyAllocationGrid from "@/components/WeeklyAllocationGrid";
 import { useAuth } from "@/lib/auth-context";
 import { useToday } from "@/lib/use-today";
 import {
@@ -38,6 +39,10 @@ import {
   saveDraft,
   loadDraft,
   getDutyChangeRequests,
+  getDutyOptions,
+  getMyPublishedDuties,
+  DutyOptions,
+  MyPublishedDuty,
   submitDutyChangeRequest,
   approveDutyChangeRequest,
   rejectDutyChangeRequest,
@@ -96,6 +101,7 @@ export default function UnifiedRosterPage() {
   const [activeTab, setActiveTab] = useState<OuterTab>("rosters");
   const [shifts, setShifts] = useState<ShiftInfo[]>([]);
   const [pendingChangeCount, setPendingChangeCount] = useState<number>(0);
+  const [allocationMode, setAllocationMode] = useState<"day" | "week">("day");
 
   // Cross-tab handover state
   const [allocationTarget, setAllocationTarget] = useState<{ date: string; shift: string } | null>(null);
@@ -169,7 +175,7 @@ export default function UnifiedRosterPage() {
             className={`btn btn-sm ${activeTab === "rosters" ? "btn-primary" : "btn-secondary"}`}
             onClick={() => switchTab("rosters")}
           >
-            📅 Shift Rosters
+            Shift Rosters
           </button>
 
           {canAllocate && (
@@ -178,7 +184,7 @@ export default function UnifiedRosterPage() {
               className={`btn btn-sm ${activeTab === "allocation" ? "btn-primary" : "btn-secondary"}`}
               onClick={() => switchTab("allocation")}
             >
-              🧩 Duty Allocation
+              Duty Allocation
             </button>
           )}
 
@@ -188,7 +194,7 @@ export default function UnifiedRosterPage() {
             onClick={() => switchTab("requests")}
             style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
           >
-            <span>🔄 Change Requests</span>
+            <span>Change Requests</span>
             {pendingChangeCount > 0 && (
               <span className="badge badge-warning" style={{ fontSize: 10, padding: "2px 6px" }}>
                 {pendingChangeCount}
@@ -232,17 +238,32 @@ export default function UnifiedRosterPage() {
 
       {/* Tab 2: Duty Allocation */}
       {activeTab === "allocation" && canAllocate && (
-        <DutyAllocationPanel
-          token={token!}
-          user={user}
-          shifts={shifts}
-          labels={labels}
-          todayIso={todayIso}
-          isSho={isSho}
-          isAdminSi={isAdminSi}
-          initialDate={allocationTarget?.date}
-          initialShift={allocationTarget?.shift}
-        />
+        <>
+          <div role="group" aria-label="Allocation view" style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+            {(["day", "week"] as const).map((m) => (
+              <button key={m} type="button" aria-pressed={allocationMode === m}
+                className={`btn btn-sm ${allocationMode === m ? "btn-primary" : "btn-secondary"}`}
+                onClick={() => setAllocationMode(m)}>
+                {m === "day" ? "Day (by duty point)" : "Week (by officer)"}
+              </button>
+            ))}
+          </div>
+          {allocationMode === "day" ? (
+            <DutyAllocationPanel
+              token={token!}
+              user={user}
+              shifts={shifts}
+              labels={labels}
+              todayIso={todayIso}
+              isSho={isSho}
+              isAdminSi={isAdminSi}
+              initialDate={allocationTarget?.date}
+              initialShift={allocationTarget?.shift}
+            />
+          ) : (
+            <WeeklyAllocationGrid token={token!} user={user} labels={labels} todayIso={todayIso} canEdit={isShoOrAdmin} />
+          )}
+        </>
       )}
 
       {/* Tab 3: Change Requests */}
@@ -432,10 +453,10 @@ function RostersPanel({
 
   const actions = (r: RosterItem) => (
     <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-      <button className="btn btn-secondary btn-sm" onClick={() => openDetail(r.id)}>📋 Allocations</button>
-      <button className="btn btn-secondary btn-sm" onClick={() => openVersions(r.id)}>🕘 Versions</button>
+      <button className="btn btn-secondary btn-sm" onClick={() => openDetail(r.id)}>Allocations</button>
+      <button className="btn btn-secondary btn-sm" onClick={() => openVersions(r.id)}>Versions</button>
       {user?.role !== "STAFF" && (
-        <button className="btn btn-secondary btn-sm" onClick={() => handleExplain(r.id)} title="Ask AI Copilot to explain allocation decisions">🤖 AI Explain</button>
+        <button className="btn btn-secondary btn-sm" onClick={() => handleExplain(r.id)} title="Ask AI Copilot to explain allocation decisions">AI Explain</button>
       )}
       {r.status === "draft" && isAdminSi && (
         <button className="btn btn-secondary btn-sm" onClick={() => run(() => submitRoster(token, r.id), `Roster #${r.id} submitted for SHO approval.`, r.id)}>Submit</button>
@@ -474,7 +495,7 @@ function RostersPanel({
       {myDuties.length > 0 && (
         <div className="card" style={{ marginBottom: 20 }}>
           <div className="card__header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span className="card__title">📌 My Published Duties</span>
+            <span className="card__title">My Published Duties</span>
             <span style={{ fontSize: 12, color: "#94a3b8" }}>Assignments in published station rosters</span>
           </div>
           <div className="card__body" style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -490,7 +511,7 @@ function RostersPanel({
                     style={{ fontSize: 11, padding: "2px 8px" }}
                     onClick={() => onRequestChange(d)}
                   >
-                    🔄 Request Shift/Duty Change
+                    Request Shift/Duty Change
                   </button>
                 </div>
               </div>
@@ -594,7 +615,7 @@ function RostersPanel({
               <div style={{ padding: 30, textAlign: "center", color: "#94a3b8" }}>Loading rosters...</div>
             ) : rosters.length === 0 ? (
               <div className="empty-state" style={{ padding: 40 }}>
-                <div className="empty-state__icon">📅</div>
+                <div className="empty-state__icon"></div>
                 <div className="empty-state__title">No Rosters Found</div>
                 <div className="empty-state__text">No rosters match your filters.</div>
               </div>
@@ -777,7 +798,7 @@ function RostersPanel({
 
       {/* AI Explain Advisory Modal */}
       {showAiModal && (
-        <Modal width={560} title="🤖 AI Roster Explainability & Advisory" onClose={() => setShowAiModal(false)}
+        <Modal width={560} title="AI Roster Explainability & Advisory" onClose={() => setShowAiModal(false)}
           footer={<button className="btn btn-secondary" onClick={() => setShowAiModal(false)}>Close Advisory</button>}>
           {aiLoading ? (
             <div style={{ padding: 30, textAlign: "center" }}>Analyzing rotation rules, rest hours, and leave records...</div>
@@ -1113,11 +1134,11 @@ function DutyAllocationPanel({
               {activeRoster.status === "draft" && canEdit && (
                 <>
                   <button className="btn btn-primary btn-sm" onClick={handleSaveAllocations} disabled={saving || validating}>
-                    💾 Save Allocation Draft{dirty ? " *" : ""}
+                    Save Allocation Draft{dirty ? " *" : ""}
                   </button>
                   {isAdminSi && (
                     <button className="btn btn-secondary btn-sm" onClick={() => act(() => submitRoster(token, activeRoster.id), `Roster #${activeRoster.id} submitted for SHO approval.`)} disabled={saving}>
-                      📤 Submit for Approval
+                      Submit for Approval
                     </button>
                   )}
                 </>
@@ -1126,7 +1147,7 @@ function DutyAllocationPanel({
                 <button className="btn btn-primary btn-sm" onClick={() => act(() => approveRoster(token, activeRoster.id), `Roster #${activeRoster.id} approved.`)} disabled={saving}>✓ Approve Roster (SHO)</button>
               )}
               {activeRoster.status === "approved" && canEdit && (
-                <button className="btn btn-success btn-sm" onClick={() => act(() => publishRoster(token, activeRoster.id), `Roster #${activeRoster.id} published.`)} disabled={saving}>📢 Publish Roster</button>
+                <button className="btn btn-success btn-sm" onClick={() => act(() => publishRoster(token, activeRoster.id), `Roster #${activeRoster.id} published.`)} disabled={saving}>Publish Roster</button>
               )}
             </>
           )}
@@ -1420,6 +1441,8 @@ function DutyChangeRequestsPanel({
   const [statusFilter, setStatusFilter] = useState<string>("all");
 
   const [showSubmitModal, setShowSubmitModal] = useState(false);
+  const [dutyOptions, setDutyOptions] = useState<DutyOptions | null>(null);
+  const [myDuties, setMyDuties] = useState<MyPublishedDuty[]>([]);
   const [formData, setFormData] = useState({
     roster_id: 0,
     current_roster_date: "",
@@ -1429,6 +1452,28 @@ function DutyChangeRequestsPanel({
     requested_duty_category: "",
     reason: "",
   });
+
+  // Dropdown choices for the form: duty points and the officer's own published duties (best effort).
+  useEffect(() => {
+    if (!showSubmitModal || !token) return;
+    getDutyOptions(token).then(setDutyOptions).catch(() => setDutyOptions(null));
+    getMyPublishedDuties(token).then(setMyDuties).catch(() => setMyDuties([]));
+  }, [showSubmitModal, token]);
+
+  const pickMyDuty = (value: string) => {
+    const d = myDuties[Number(value)];
+    if (!d) return;
+    setFormData((f) => ({
+      ...f,
+      roster_id: d.roster_id,
+      current_roster_date: d.duty_date,
+      current_shift_code: d.shift_name,
+      current_duty_category: d.duty_category,
+      requested_shift_code: d.shift_name === "A" ? "B" : "A",
+    }));
+  };
+  const dutyChoices = (keep: string) =>
+    Array.from(new Set([...(dutyOptions?.duty_categories ?? []), ...(keep ? [keep] : [])]));
 
   const isSupervisor = ["SHO", "ADMIN_SI", "SUPER_ADMIN", "SECTOR_SI"].includes(user?.role || "");
   const canDecide = ["SHO", "ADMIN_SI", "SUPER_ADMIN"].includes(user?.role || "");
@@ -1578,7 +1623,7 @@ function DutyChangeRequestsPanel({
             <div style={{ padding: 30, textAlign: "center", color: "#94a3b8" }}>Loading change requests...</div>
           ) : requests.length === 0 ? (
             <div className="empty-state" style={{ padding: 40 }}>
-              <div className="empty-state__icon">🔄</div>
+              <div className="empty-state__icon"></div>
               <div className="empty-state__title">No Change Requests Found</div>
               <div className="empty-state__text">
                 {statusFilter !== "all"
@@ -1680,6 +1725,20 @@ function DutyChangeRequestsPanel({
               Use this form when your rostered shift or duty allocation cannot be fulfilled due to unavoidable medical, personal, or operational conflicts.
             </p>
 
+            {myDuties.length > 0 && (
+              <div className="form-group" style={{ marginBottom: 14 }}>
+                <label className="form-label" htmlFor="req-my-duty">My published duty (fills the fields below)</label>
+                <select id="req-my-duty" className="form-control" defaultValue="" onChange={(e) => pickMyDuty(e.target.value)}>
+                  <option value="">-- Select one of my duties --</option>
+                  {myDuties.map((d, i) => (
+                    <option key={`${d.roster_id}-${d.duty_category}-${i}`} value={i}>
+                      {d.duty_date} · Shift {d.shift_name} · {d.duty_category}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
             <div className="form-group" style={{ marginBottom: 14 }}>
               <label className="form-label" htmlFor="req-roster-id">Roster ID *</label>
               <input
@@ -1723,14 +1782,17 @@ function DutyChangeRequestsPanel({
 
             <div className="form-group" style={{ marginBottom: 14 }}>
               <label className="form-label" htmlFor="req-curr-duty">Current Duty Category</label>
-              <input
+              <select
                 id="req-curr-duty"
-                type="text"
                 className="form-control"
                 value={formData.current_duty_category}
                 onChange={(e) => setFormData({ ...formData, current_duty_category: e.target.value })}
-                placeholder="e.g. Law & Order Patrol, Station Writer, etc."
-              />
+              >
+                <option value="">General / Unassigned</option>
+                {dutyChoices(formData.current_duty_category).map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 14 }}>
@@ -1751,14 +1813,17 @@ function DutyChangeRequestsPanel({
 
               <div className="form-group">
                 <label className="form-label" htmlFor="req-target-duty">Requested Duty Point</label>
-                <input
+                <select
                   id="req-target-duty"
-                  type="text"
                   className="form-control"
                   value={formData.requested_duty_category}
                   onChange={(e) => setFormData({ ...formData, requested_duty_category: e.target.value })}
-                  placeholder="Optional preferred duty"
-                />
+                >
+                  <option value="">Any suitable duty point</option>
+                  {dutyChoices(formData.requested_duty_category).map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
               </div>
             </div>
 

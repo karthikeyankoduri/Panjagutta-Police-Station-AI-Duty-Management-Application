@@ -3,6 +3,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
+import accessMatrix from "@/lib/access-matrix.json";
+import ChatLauncher from "@/components/ChatLauncher";
+import Icon from "@/components/icons";
 import {
   getInbox,
   getNotifications,
@@ -20,26 +23,24 @@ interface NavItem {
   roles?: string[];
 }
 
-const OFFICERS = ["SHO", "ADMIN_SI", "SECTOR_SI", "DI", "DSI", "SUPER_ADMIN"];
-const ADMINS = ["SHO", "ADMIN_SI", "SUPER_ADMIN"];
+// Who sees what lives in one shared file (lib/access-matrix.json). The Android app and the backend
+// tests assert against the same file, so a change here cannot drift from them unnoticed.
+const GROUPS = accessMatrix.groups as Record<string, string[]>;
+const OFFICERS = GROUPS.OFFICERS;
 
-// Role matrix is provisional (guide §3.2). The server enforces every permission;
-// this menu only hides what a role cannot use.
-const NAV_ITEMS: NavItem[] = [
-  { href: "/dashboard", label: "Dashboard", icon: "📊", roles: OFFICERS },
-  { href: "/roster", label: "Roster & Duty", icon: "📋" },
-  { href: "/attendance", label: "Attendance", icon: "✅" },
-  { href: "/tasks", label: "Tasks", icon: "📌" },
-  { href: "/movements", label: "Outside Movements", icon: "🚗" },
-  { href: "/leave", label: "Leave & Rest", icon: "🏖️" },
-  { href: "/attachments", label: "Attachments", icon: "🔗", roles: OFFICERS },
-  { href: "/approvals", label: "Approvals & Alerts", icon: "🔔", roles: OFFICERS },
-  { href: "/reports", label: "Reports", icon: "📄", roles: OFFICERS },
-  { href: "/policy", label: "Policy & Shifts", icon: "⚙️", roles: ADMINS },
-  { href: "/config", label: "Administration", icon: "🧩", roles: ADMINS },
-  { href: "/audit", label: "Audit Log", icon: "🔒", roles: ADMINS },
-  { href: "/guide", label: "Workflow Guide", icon: "📘" },
-];
+const NAV_ICONS: Record<string, string> = {
+  dashboard: "dashboard", roster: "roster", attendance: "attendance", tasks: "tasks", movements: "movements", leave: "leave",
+  attachments: "attachments", approvals: "approvals", reports: "reports", policy: "policy", config: "config", audit: "audit", locations: "pin", guide: "guide",
+};
+
+// The server enforces every permission; this menu only hides what a role cannot use.
+const NAV_ITEMS: NavItem[] = accessMatrix.modules.filter((m) => m.id !== "locations").map((m) => ({
+  href: m.href,
+  label: m.label,
+  icon: NAV_ICONS[m.id] ?? "dashboard",
+  roles: m.group === "ALL" ? undefined : GROUPS[m.group],
+}));
+// Live Locations has no menu entry or page of its own: it is a button on the Dashboard that opens the map there.
 
 const ROLE_LABELS: Record<string, string> = {
   SHO: "SHO", ADMIN_SI: "Admin SI", SECTOR_SI: "Sector SI", DI: "DI", DSI: "DSI", STAFF: "Staff", SUPER_ADMIN: "Super Admin",
@@ -114,7 +115,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     if (isOfficer) {
       try {
         const inbox = await getInbox(token);
-        setApprovalCount(inbox.counts.total - inbox.counts.alerts);
+        setApprovalCount(inbox.counts.total - inbox.counts.alerts - inbox.counts.leave);
       } catch {
         /* badge is best-effort */
       }
@@ -132,6 +133,10 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     await logout();
     router.push("/login");
   };
+
+  // Officers land on the Dashboard; staff have no Dashboard, so their home is the roster.
+  const homeHref = user ? (isOfficer ? "/dashboard" : "/roster") : null;
+  const homeLabel = isOfficer ? "Dashboard" : "My Roster";
 
   const currentNav = NAV_ITEMS.find((item) => pathname?.startsWith(item.href));
   const isUnauthorized = Boolean(user && currentNav?.roles && !currentNav.roles.includes(user.role));
@@ -152,16 +157,15 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const isStaff = user.role === "STAFF";
   const bottomNavItems = isStaff
     ? [
-        { href: "/roster", label: "My Duty", icon: "📅" },
-        { href: "/attendance", label: "Attendance", icon: "✅" },
-        { href: "/leave", label: "Leave", icon: "🏖️" },
-        { href: "/movements", label: "Movements", icon: "🚗" },
+        { href: "/roster", label: "My Duty", icon: "roster" },
+        { href: "/attendance", label: "Attendance", icon: "attendance" },
+        { href: "/movements", label: "Movements", icon: "movements" },
       ]
     : [
-        { href: "/dashboard", label: "Dashboard", icon: "📊" },
-        { href: "/roster", label: "Roster", icon: "📅" },
-        { href: "/approvals", label: "Approvals", icon: "🔔" },
-        { href: "/attendance", label: "Attendance", icon: "✅" },
+        { href: "/dashboard", label: "Dashboard", icon: "dashboard" },
+        { href: "/roster", label: "Roster", icon: "roster" },
+        { href: "/approvals", label: "Approvals", icon: "approvals" },
+        { href: "/attendance", label: "Attendance", icon: "attendance" },
       ];
 
   const openNote = async (n: NotificationItem) => {
@@ -170,7 +174,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     setBellOpen(false);
     refreshBadges();
     const target: Record<string, string> = {
-      LeaveRequest: "/leave", Movement: "/movements", Roster: "/roster", Task: "/tasks",
+      Movement: "/movements", Roster: "/roster", Task: "/tasks",
       RosterAssignment: "/roster?tab=allocation", AttachmentOrder: "/attachments", DutyChangeRequest: "/roster?tab=requests",
     };
     if (n.entity_type && target[n.entity_type]) router.push(target[n.entity_type]);
@@ -188,16 +192,17 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             aria-label={mobileMenuOpen ? "Close navigation menu" : "Open navigation menu"}
             aria-expanded={mobileMenuOpen}
           >
-            <span className="hamburger-icon" aria-hidden="true">{mobileMenuOpen ? "✕" : "☰"}</span>
+            <Icon name={mobileMenuOpen ? "close" : "menu"} size={20} />
           </button>
           <div className="app-header__logo">
-            <span className="station-icon" aria-hidden="true">🚔</span>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/crest.png" alt="Hyderabad City Police crest" className="app-header__crest" width={38} height={44} />
             <div>
+              <div className="app-header__eyebrow">Hyderabad City Police</div>
               <div className="app-header__title">
                 <span className="desktop-title">Panjagutta Police Station</span>
                 <span className="mobile-title">Panjagutta PS</span>
               </div>
-              <div className="app-header__subtitle">Hyderabad City Police · Duty Management</div>
             </div>
           </div>
         </div>
@@ -213,7 +218,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               aria-expanded={bellOpen}
               style={{ position: "relative" }}
             >
-              🔔
+              <Icon name="bell" size={18} />
               {unread > 0 && (
                 <span style={{ position: "absolute", top: -6, right: -6, background: "var(--color-danger, #dc2626)", color: "#fff", borderRadius: 10, fontSize: 10, padding: "1px 6px", fontWeight: 700 }}>
                   {unread > 99 ? "99+" : unread}
@@ -317,7 +322,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           </div>
           <button className="btn btn-secondary btn-sm app-header__signout-btn" onClick={handleLogout} id="btn-logout" title="Sign out of system">
             <span className="signout-text">Sign Out</span>
-            <span className="signout-icon" aria-hidden="true">🚪</span>
+            <span className="signout-icon"><Icon name="logout" size={18} /></span>
           </button>
         </div>
       </header>
@@ -334,7 +339,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       <aside className={`sidebar ${mobileMenuOpen ? "mobile-drawer-open" : ""}`} aria-label="Main sidebar navigation">
         <div className="drawer-header">
           <div className="drawer-officer-info">
-            <div className="drawer-officer-avatar">👮</div>
+            <div className="drawer-officer-avatar">{(user.staff_name || user.username).charAt(0).toUpperCase()}</div>
             <div style={{ overflow: "hidden" }}>
               <div className="drawer-officer-name truncate">{user.staff_name || user.username}</div>
               <div className="drawer-officer-role">
@@ -353,14 +358,14 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             {visibleItems.map((item) => {
               const active = pathname?.startsWith(item.href);
               return (
-                <li key={item.href} className="sidebar__nav-item">
+                <li key={item.label} className="sidebar__nav-item">
                   <Link
                     href={item.href}
                     className={`sidebar__nav-link${active ? " active" : ""}`}
                     aria-current={active ? "page" : undefined}
                     onClick={() => setMobileMenuOpen(false)}
                   >
-                    <span className="nav-icon" aria-hidden="true">{item.icon}</span>
+                    <span className="nav-icon" aria-hidden="true"><Icon name={item.icon} size={18} /></span>
                     <span className="nav-label">{item.label}</span>
                     {item.href === "/approvals" && approvalCount > 0 && (
                       <span className="badge badge-warning" style={{ marginLeft: "auto" }} aria-label={`${approvalCount} waiting`}>
@@ -376,7 +381,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
         <div className="drawer-logout-container">
           <button className="btn btn-danger btn-sm drawer-logout-btn" onClick={handleLogout}>
-            <span>🚪 Sign Out</span>
+            <span>Sign Out</span>
           </button>
         </div>
 
@@ -384,19 +389,27 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           <div style={{ fontSize: 10, color: "#475569", textAlign: "center", lineHeight: 1.5 }}>
             Hyderabad City Police · Panjagutta PS<br />
             Duty Management v0.2
-            {user.is_demo && <><br /><span style={{ color: "#dc2626" }}>⚠ Demo account</span></>}
+            {user.is_demo && <><br /><span style={{ color: "#dc2626" }}>Demo account</span></>}
           </div>
         </div>
       </aside>
 
-      <main className="main-content" id="main-content">{children}</main>
+      <main className="main-content" id="main-content">
+        {homeHref && !pathname?.startsWith(homeHref) && (
+          <Link href={homeHref} className="btn btn-secondary btn-sm" style={{ display: "inline-block", marginBottom: 12 }}>
+            <Icon name="back" size={14} /> Back to {homeLabel}
+          </Link>
+        )}
+        {children}
+      </main>
+      <ChatLauncher />
 
       <nav className="mobile-bottom-nav" aria-label="Quick mobile navigation">
         {bottomNavItems.map((item) => {
           const isActive = pathname?.startsWith(item.href);
           return (
             <Link key={item.href} href={item.href} className={`mobile-bottom-nav__item ${isActive ? "active" : ""}`} aria-current={isActive ? "page" : undefined}>
-              <span className="bottom-nav-icon">{item.icon}</span>
+              <span className="bottom-nav-icon"><Icon name={item.icon} size={20} /></span>
               <span className="bottom-nav-label">{item.label}</span>
             </Link>
           );
@@ -407,7 +420,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
           aria-label="Open full station menu"
         >
-          <span className="bottom-nav-icon">☰</span>
+          <span className="bottom-nav-icon"><Icon name="more" size={20} /></span>
           <span className="bottom-nav-label">More</span>
         </button>
       </nav>

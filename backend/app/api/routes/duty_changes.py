@@ -11,7 +11,7 @@ from app.auth.dependencies import get_current_user
 from app.db.database import get_db
 from app.models.models import (
     DutyChangeRequest, DutyChangeRequestStatus,
-    Roster, RosterAssignment, DutyMaster, Staff, User, UserRoleEnum,
+    Roster, RosterAssignment, RosterStatus, DutyMaster, ShiftCode, Staff, User, UserRoleEnum,
 )
 from app.services.audit import log_event, AuditAction
 from app.services.notifications import notify_staff, notify_roles
@@ -88,6 +88,115 @@ async def _resolve_staff_id(db: AsyncSession, user: User) -> Optional[int]:
     return None
 
 
+# -- Locating and applying the change on the roster ---------------------------
+async def _find_assignment(
+    db: AsyncSession, roster_id: int, staff_id: int, category: Optional[str]
+) -> Optional[RosterAssignment]:
+    """The officer's assignment on this roster (matching the duty point when they named one).
+    A roster is versioned, so if the officer is not on this exact version, the latest published
+    version of the same date and shift is tried."""
+    roster = (await db.execute(select(Roster).where(Roster.id == roster_id))).scalar_one_or_none()
+    if roster is None:
+        return None
+    ids = [roster.id]
+    latest = (await db.execute(
+        select(Roster.id).where(
+            Roster.roster_date == roster.roster_date, Roster.shift_code == roster.shift_code,
+            Roster.status == RosterStatus.PUBLISHED,
+        ).order_by(Roster.version.desc()).limit(1)
+    )).scalar_one_or_none()
+    if latest and latest not in ids:
+        ids.append(latest)
+    for rid in ids:
+        rows = (await db.execute(
+            select(RosterAssignment, DutyMaster)
+            .join(DutyMaster, DutyMaster.id == RosterAssignment.duty_master_id)
+            .where(RosterAssignment.roster_id == rid, RosterAssignment.staff_id == staff_id)
+        )).all()
+        if not rows:
+            continue
+        if category:
+            for asn, duty in rows:
+                if duty.category == category:
+                    return asn
+        return rows[0][0]
+    return None
+
+
+async def _find_duty(db: AsyncSession, category: str, shift: ShiftCode) -> Optional[DutyMaster]:
+    """The active duty point with this name for the shift (a duty defined for all shifts also matches)."""
+    rows = (await db.execute(
+        select(DutyMaster).where(DutyMaster.category == category, DutyMaster.is_active == True)
+    )).scalars().all()
+    for d in rows:
+        if d.shift_code == shift:
+            return d
+    for d in rows:
+        if d.shift_code is None:
+            return d
+    return None
+
+
+async def _apply_change(db: AsyncSession, dcr: DutyChangeRequest, approver: User, now: datetime) -> dict:
+    """Make an approved request real: move the officer to the requested shift and/or duty point on the
+    published roster. Raises 409 (leaving the request pending) when it cannot be applied."""
+    asn = None
+    if dcr.roster_assignment_id:
+        asn = (await db.execute(select(RosterAssignment).where(RosterAssignment.id == dcr.roster_assignment_id))).scalar_one_or_none()
+    if asn is None:  # requests made before assignments were linked
+        asn = await _find_assignment(db, dcr.roster_id, dcr.staff_id, dcr.current_duty_category)
+    if asn is None:
+        raise HTTPException(status_code=409, detail="The officer is no longer assigned on this roster, so there is nothing to change.")
+
+    roster = (await db.execute(select(Roster).where(Roster.id == asn.roster_id))).scalar_one()
+    old_duty = (await db.execute(select(DutyMaster).where(DutyMaster.id == asn.duty_master_id))).scalar_one()
+    before = {"roster_id": roster.id, "shift": roster.shift_code.value, "duty": old_duty.category}
+
+    target_roster = roster
+    if dcr.requested_shift_code and dcr.requested_shift_code != roster.shift_code.value:
+        try:
+            target_shift = ShiftCode(dcr.requested_shift_code)
+        except ValueError:
+            raise HTTPException(status_code=422, detail=f"Unknown shift {dcr.requested_shift_code}.")
+        target_roster = (await db.execute(
+            select(Roster).where(
+                Roster.roster_date == roster.roster_date, Roster.shift_code == target_shift,
+                Roster.status == RosterStatus.PUBLISHED,
+            ).order_by(Roster.version.desc()).limit(1)
+        )).scalar_one_or_none()
+        if target_roster is None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"No published roster exists for {roster.roster_date} shift {target_shift.value}. Publish it first, then approve.",
+            )
+        clash = (await db.execute(
+            select(RosterAssignment.id).where(
+                RosterAssignment.roster_id == target_roster.id, RosterAssignment.staff_id == asn.staff_id,
+            ).limit(1)
+        )).scalar_one_or_none()
+        if clash:
+            raise HTTPException(status_code=409, detail=f"The officer already has a duty on shift {target_shift.value} that day.")
+
+    # Which duty point the officer ends up on: the requested one, else the same one if it exists on the new shift.
+    category = dcr.requested_duty_category or (old_duty.category if target_roster.id != roster.id else None)
+    new_duty = old_duty
+    if category and (category != old_duty.category or target_roster.id != roster.id):
+        found = await _find_duty(db, category, target_roster.shift_code)
+        if found is None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Duty point '{category}' has no requirement defined for shift {target_roster.shift_code.value}. Choose a duty point for that shift.",
+            )
+        new_duty = found
+
+    if target_roster.id != roster.id:
+        asn.roster_id = target_roster.id
+    asn.duty_master_id = new_duty.id
+    asn.notes = (asn.notes or "") + f"\n[Duty change #{dcr.id} approved by {approver.username} on {now.date()}]"
+    dcr.roster_assignment_id = asn.id
+    return {"before": before, "after": {"roster_id": target_roster.id, "shift": target_roster.shift_code.value, "duty": new_duty.category}}
+
+
 async def _build_out(db: AsyncSession, dcr: DutyChangeRequest) -> DutyChangeRequestOut:
     # Staff info
     staff_res = await db.execute(select(Staff).where(Staff.id == dcr.staff_id))
@@ -145,8 +254,7 @@ async def submit_duty_change_request(
     if not staff_id and current_user.role == UserRoleEnum.STAFF:
         raise HTTPException(status_code=404, detail="Staff profile not found for this user account.")
 
-    # For STAFF: they can only request for themselves
-    if current_user.role == UserRoleEnum.STAFF and not staff_id:
+    if not staff_id:
         raise HTTPException(status_code=403, detail="No linked staff profile.")
 
     from datetime import date as _date
@@ -155,9 +263,17 @@ async def submit_duty_change_request(
     except ValueError:
         raise HTTPException(status_code=422, detail="current_roster_date must be YYYY-MM-DD.")
 
+    # Link the request to the officer's real assignment so that approval can change the roster.
+    assignment = await _find_assignment(db, payload.roster_id, staff_id, payload.current_duty_category)
+    if assignment is None:
+        raise HTTPException(
+            status_code=422,
+            detail="You are not assigned on that roster. Pick one of your published duties.",
+        )
+
     dcr = DutyChangeRequest(
         roster_id=payload.roster_id,
-        roster_assignment_id=payload.roster_assignment_id,
+        roster_assignment_id=assignment.id,
         staff_id=staff_id,
         requested_by_user_id=current_user.id,
         current_shift_code=payload.current_shift_code,
@@ -273,26 +389,13 @@ async def approve_duty_change_request(
     dcr.reviewed_at = now
     dcr.reviewer_remarks = payload.remarks
 
-    # Apply roster assignment change if assignment_id is linked
-    if dcr.roster_assignment_id:
-        asn_res = await db.execute(
-            select(RosterAssignment).where(RosterAssignment.id == dcr.roster_assignment_id)
-        )
-        asn = asn_res.scalar_one_or_none()
-        if asn:
-            if dcr.requested_duty_category:
-                # Find matching duty master by category
-                dm_res = await db.execute(
-                    select(DutyMaster).where(DutyMaster.category == dcr.requested_duty_category, DutyMaster.is_active == True)
-                )
-                dm = dm_res.scalars().first()
-                if dm:
-                    asn.duty_master_id = dm.id
-            asn.notes = (asn.notes or "") + f"\n[Duty change approved by {current_user.username} on {now.date()}]"
+    # Make the approval real on the roster (409, leaving the request pending, if it cannot be applied).
+    applied = await _apply_change(db, dcr, current_user, now)
 
     await log_event(db, actor=current_user, action="DUTY_CHANGE_APPROVED",
                     entity_type="DutyChangeRequest", entity_id=dcr.id,
-                    new_values={"status": "approved", "remarks": payload.remarks})
+                    old_values=applied["before"],
+                    new_values={"status": "approved", "remarks": payload.remarks, "roster": applied["after"]})
 
     # Notify the requesting officer
     try:

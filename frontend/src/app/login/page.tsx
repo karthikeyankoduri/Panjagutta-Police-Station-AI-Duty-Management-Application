@@ -57,14 +57,10 @@ export default function LoginPage() {
     <div className="login-page">
       <div className="login-card">
         <div className="login-card__logo">
-          <div style={{ fontSize: 36, marginBottom: 8 }}>🚔</div>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/crest.png" alt="Hyderabad City Police crest" width={92} height={106} />
           <div className="login-card__station-name">Panjagutta Police Station</div>
-          <div className="login-card__system-name">Hyderabad City Police · Duty Management</div>
-        </div>
-
-        <div className="login-card__demo-notice">
-          <strong>AUTHORIZED PERSONNEL ONLY</strong><br />
-          Sign in with your assigned credentials. Every sign-in attempt is recorded.
+          <div className="login-card__system-name">Hyderabad City Police Portal</div>
         </div>
 
         {notice && (
@@ -103,7 +99,7 @@ export default function LoginPage() {
 
           {error && (
             <div role="alert" style={{ background: "#fee2e2", border: "1px solid #fca5a5", borderRadius: 8, padding: "10px 14px", color: "#991b1b", fontSize: 13, marginBottom: 16 }}>
-              {error.toLowerCase().includes("locked") && <strong>🔒 Account locked. </strong>}
+              {error.toLowerCase().includes("locked") && <strong>Account locked. </strong>}
               {error}
             </div>
           )}
@@ -118,7 +114,7 @@ export default function LoginPage() {
             {loading ? <><span className="spinner" style={{ width: 16, height: 16, borderWidth: 2 }} /> Signing in...</> : "Sign In"}
           </button>
           <div style={{ fontSize: 11, color: "#64748b", marginTop: 10, textAlign: "center" }}>
-            Accounts lock after 5 failed attempts. First-time users must set a new password.
+            Authorised personnel only. Every sign-in attempt is recorded. Accounts lock after 5 failed attempts.
           </div>
         </form>
 

@@ -10,7 +10,7 @@ from typing import Optional, List
 
 from sqlalchemy import (
     String, Integer, Boolean, DateTime, Date, Time, Text, Enum as SAEnum,
-    ForeignKey, UniqueConstraint, Index, func, JSON, false
+    ForeignKey, UniqueConstraint, Index, func, JSON, false, Float
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -286,6 +286,24 @@ class Staff(Base):
     leave_requests: Mapped[List["LeaveRequest"]] = relationship("LeaveRequest", back_populates="staff")
     movements: Mapped[List["Movement"]] = relationship("Movement", back_populates="staff")
     attachment_orders: Mapped[List["AttachmentOrder"]] = relationship("AttachmentOrder", back_populates="staff", foreign_keys="AttachmentOrder.staff_id")
+
+
+class StaffLocation(Base):
+    """Latest GPS fix per officer, reported by the Android app (one row per staff)."""
+    __tablename__ = "staff_locations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    staff_id: Mapped[int] = mapped_column(Integer, ForeignKey("staff.id", ondelete="CASCADE"), unique=True, nullable=False, index=True)
+    latitude: Mapped[float] = mapped_column(Float, nullable=False)
+    longitude: Mapped[float] = mapped_column(Float, nullable=False)
+    location_name: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    # Point the current location_name was resolved for (drives the >50 m re-geocode rule)
+    geocoded_lat: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    geocoded_lng: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_updated: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    staff: Mapped["Staff"] = relationship("Staff")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -619,6 +637,33 @@ class Notification(Base):
     read_by: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)  # user ids that read a role notification
     is_read: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Chat — station channel + one private thread per user (visible to that user and the superiors)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ChatMessage(Base):
+    """thread_user_id NULL = the Station channel (everyone); otherwise the private thread of that user."""
+    __tablename__ = "chat_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    thread_user_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    sender_user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(String(20), default="direct")  # direct | channel | broadcast
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class ChatRead(Base):
+    """Per-user read marker for a thread (thread_key 0 = Station channel, else the thread owner's user id)."""
+    __tablename__ = "chat_reads"
+    __table_args__ = (UniqueConstraint("user_id", "thread_key", name="uq_chat_read"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    thread_key: Mapped[int] = mapped_column(Integer, nullable=False)
+    last_read_id: Mapped[int] = mapped_column(Integer, default=0)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

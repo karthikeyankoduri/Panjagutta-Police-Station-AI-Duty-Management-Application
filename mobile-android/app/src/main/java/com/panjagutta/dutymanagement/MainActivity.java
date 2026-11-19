@@ -66,7 +66,7 @@ public class MainActivity extends Activity {
     static final int TINT = Color.rgb(233, 240, 254);
     static final int TINT_LINE = Color.rgb(207, 221, 250);
     // Personal self-service tabs (STAFF role). Other roles get a module-based bar, see buildNavigation().
-    private static final String[] STAFF_TAB_KEYS = {"Home", "Calendar", "Roster", "Attend", "Leave"};
+    private static final String[] STAFF_TAB_KEYS = {"Home", "Calendar", "Roster", "Attend", "Requests"};
     private static final String[] STAFF_TAB_LABELS = {"Home", "Calendar", "Roster", "Attendance", "Requests"};
     private static final int[] STAFF_TAB_ICONS = {R.drawable.ic_home, R.drawable.ic_calendar,
             R.drawable.ic_roster, R.drawable.ic_attendance, R.drawable.ic_leave};
@@ -112,14 +112,17 @@ public class MainActivity extends Activity {
     private android.animation.ObjectAnimator skeletonAnimator;
     private int insetTop;
     private int insetBottom;
+    /** File name Activity.getPreferences() uses (the activity's local class name); the tracking service reads the same store. */
+    static final String PREFS_NAME = "MainActivity";
     private TokenStore tokenStore;
+    private boolean locationAsked;
     private JSONArray taskData = new JSONArray();
     private JSONArray movementData = new JSONArray();
     private JSONObject historyData;
     private JSONArray notificationData = new JSONArray();
     int unreadCount;
     private TextView bellBadge;
-    private String requestMode = "leave";
+    private String requestMode = "movement";
     private EditText movementPurpose;
     private EditText movementDestination;
     private EditText movementReturn;
@@ -129,9 +132,87 @@ public class MainActivity extends Activity {
         @Override
         public void run() {
             fetchNotifications(true);
+            fetchApprovalCount();
             mainHandler.postDelayed(this, POLL_MS);
         }
     };
+
+    private static final long IDLE_WARNING_MS = 60_000L;
+    private static final long IDLE_CHECK_MS = 5_000L;
+    private android.app.AlertDialog idleDialog;
+    /** Signs the user out after the server-configured idle time, warning a minute before (as the web does). */
+    private final Runnable idleWatch = new Runnable() {
+        @Override
+        public void run() {
+            if (token == null || profile == null) return;
+            long idle = System.currentTimeMillis() - lastInteraction;
+            if (idle >= sessionTimeoutMs) {
+                dismissIdleWarning();
+                signOut("You were signed out after a period of inactivity.");
+                return;
+            }
+            if (idle >= sessionTimeoutMs - IDLE_WARNING_MS) showIdleWarning();
+            else dismissIdleWarning();
+            mainHandler.postDelayed(this, IDLE_CHECK_MS);
+        }
+    };
+
+    private void showIdleWarning() {
+        if (idleDialog != null && idleDialog.isShowing()) return;
+        idleDialog = new android.app.AlertDialog.Builder(this)
+                .setTitle("Still there?")
+                .setMessage("You will be signed out in about a minute because of inactivity.")
+                .setCancelable(false)
+                .setPositiveButton("Stay signed in", (d, w) -> {
+                    lastInteraction = System.currentTimeMillis();
+                    idleDialog = null;
+                })
+                .setNegativeButton("Sign out", (d, w) -> {
+                    idleDialog = null;
+                    signOut();
+                })
+                .show();
+    }
+
+    private void dismissIdleWarning() {
+        if (idleDialog != null) {
+            idleDialog.dismiss();
+            idleDialog = null;
+        }
+    }
+
+    private void startIdleWatch() {
+        mainHandler.removeCallbacks(idleWatch);
+        mainHandler.postDelayed(idleWatch, IDLE_CHECK_MS);
+    }
+
+    // --- Pending approvals count on the Approvals menu item (web: nav badge, inbox total minus alerts) ---
+    private int approvalCount;
+
+    void fetchApprovalCount() {
+        if (token == null || isStaffRole()) return;
+        executor.execute(() -> {
+            try {
+                JSONObject counts = request("/dashboard/inbox", "GET", null, false).optJSONObject("counts");
+                final int n = counts == null ? 0 : Math.max(0, counts.optInt("total") - counts.optInt("alerts") - counts.optInt("leave"));
+                mainHandler.post(() -> {
+                    approvalCount = n;
+                    applyApprovalBadge();
+                });
+            } catch (Exception ignored) {
+                // Best-effort, like notification polling.
+            }
+        });
+    }
+
+    private void applyApprovalBadge() {
+        if (navItems == null || TAB_KEYS == null) return;
+        for (int i = 0; i < TAB_KEYS.length && i < navItems.length; i++) {
+            if (!(MODULE_PREFIX + RoleAccess.APPROVALS).equals(TAB_KEYS[i]) || navItems[i] == null) continue;
+            TextView label = (TextView) navItems[i].getChildAt(1);
+            label.setText(approvalCount > 0 ? TAB_LABELS[i] + " (" + approvalCount + ")" : TAB_LABELS[i]);
+        }
+    }
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -147,11 +228,11 @@ public class MainActivity extends Activity {
         } else {
             apiBase = savedApiBase;
         }
-        tokenStore = new TokenStore(getPreferences(MODE_PRIVATE));
+        tokenStore = new TokenStore(getSharedPreferences(PREFS_NAME, MODE_PRIVATE));
         sessionTimeoutMs = getPreferences(MODE_PRIVATE).getLong("session_timeout_ms", sessionTimeoutMs);
         createNotificationChannel();
-        token = savedInstanceState == null ? null : savedInstanceState.getString("token");
-        if (token == null) token = tokenStore.load();
+        // The session token is restored only from the Keystore-encrypted store, never from saved state.
+        token = tokenStore.load();
         if (token == null) {
             showLogin();
         } else {
@@ -201,7 +282,6 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onSaveInstanceState(Bundle outState) {
-        if (token != null) outState.putString("token", token);
         super.onSaveInstanceState(outState);
     }
 
@@ -227,18 +307,28 @@ public class MainActivity extends Activity {
             return;
         }
         lastInteraction = System.currentTimeMillis();
-        if (token != null && profile != null) startPolling();
+        if (token != null && profile != null) {
+            startPolling();
+            startIdleWatch();
+            if (checkSelfPermission("android.permission.ACCESS_FINE_LOCATION") == android.content.pm.PackageManager.PERMISSION_GRANTED
+                    || checkSelfPermission("android.permission.ACCESS_COARSE_LOCATION") == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                startLocationSharing();
+            }
+        }
     }
 
     @Override
     protected void onPause() {
         mainHandler.removeCallbacks(pollNotifications);
+        mainHandler.removeCallbacks(idleWatch);
+        dismissIdleWarning();
         super.onPause();
     }
 
     private void startPolling() {
         mainHandler.removeCallbacks(pollNotifications);
         mainHandler.post(pollNotifications);
+        startIdleWatch();
     }
 
     private void showLogin() {
@@ -545,24 +635,37 @@ public class MainActivity extends Activity {
         switch (module) {
             case RoleAccess.DASHBOARD: return R.drawable.ic_dashboard;
             case RoleAccess.ROSTER: return R.drawable.ic_roster;
-            case RoleAccess.ALLOCATION: return R.drawable.ic_roster;
             case RoleAccess.APPROVALS: return R.drawable.ic_approvals;
             case RoleAccess.ATTENDANCE: return R.drawable.ic_attendance;
             case RoleAccess.LEAVE: return R.drawable.ic_leave;
             case RoleAccess.MOVEMENTS: return R.drawable.ic_pin;
             case RoleAccess.TASKS: return R.drawable.ic_clock;
-            case RoleAccess.STAFF_REGISTER: return R.drawable.ic_people;
+            case RoleAccess.CONFIG: return R.drawable.ic_people;
             default: return R.drawable.ic_more;
         }
     }
 
-    /** Opens a role module (e.g. from the More menu, a notification or a cross-link). */
-    void openModule(String module) {
-        if (!MORE.equals(module) && !RoleAccess.canSee(module, role())) {
-            toast("Your role does not have access to " + RoleAccess.label(module) + ".");
+    /** Tab to open inside the next tabbed module ("allocation", "requests", ...), or null. */
+    private String pendingTab;
+
+    /** Returns and clears the tab requested by {@link #openModule}. */
+    String takePendingTab() {
+        String tab = pendingTab;
+        pendingTab = null;
+        return tab;
+    }
+
+    /**
+     * Opens a role module, or one tab of it with a "module:tab" target such as RoleAccess.ALLOCATION
+     * (from the More menu, a notification or a cross-link).
+     */
+    void openModule(String target) {
+        if (!MORE.equals(target) && !RoleAccess.canSee(target, role())) {
+            toast("Your role does not have access to " + RoleAccess.label(target) + ".");
             return;
         }
-        selectTab(MODULE_PREFIX + module);
+        pendingTab = RoleAccess.tabOf(target);
+        selectTab(MODULE_PREFIX + RoleAccess.moduleOf(target));
     }
 
     private boolean workspaceShown;
@@ -727,6 +830,7 @@ public class MainActivity extends Activity {
             label.setTextColor(selected ? BLUE : MUTED);
             label.setTypeface(Typeface.DEFAULT, selected ? Typeface.BOLD : Typeface.NORMAL);
         }
+        applyApprovalBadge();
     }
 
     void stopRefreshing() {
@@ -747,7 +851,7 @@ public class MainActivity extends Activity {
             case "Calendar": showCalendar(); break;
             case "Roster": showRosters(); break;
             case "Attend": showAttendance(); break;
-            case "Leave":
+            case "Requests":
                 content.removeAllViews();
                 addLeaveForm();
                 showLeave();
@@ -807,7 +911,7 @@ public class MainActivity extends Activity {
                     case "Home":
                         result[0] = requestArray("/mobile/rosters");
                         result[1] = requestArray("/mobile/attendance?attendance_date=" + today());
-                        result[2] = requestArray("/mobile/leave");
+                        result[2] = new JSONArray();
                         result[3] = requestArray("/mobile/tasks");
                         break;
                     case "Calendar":
@@ -825,7 +929,7 @@ public class MainActivity extends Activity {
                         result[0] = request("/notifications/?limit=50", "GET", null, false);
                         break;
                     default:
-                        result[0] = requestArray("/mobile/leave");
+                        result[0] = new JSONArray();
                         result[1] = requestArray("/mobile/movements");
                         break;
                 }
@@ -853,7 +957,7 @@ public class MainActivity extends Activity {
                     }
                     loaded.add(tab);
                     if (!tab.equals(selectedTab)) return;
-                    if ("Leave".equals(tab) && leaveHistory != null && leaveHistory.getParent() == content) {
+                    if ("Requests".equals(tab) && leaveHistory != null && leaveHistory.getParent() == content) {
                         showLeave(); // keep what the user is typing in the form
                     } else {
                         renderTab(tab);
@@ -963,36 +1067,7 @@ public class MainActivity extends Activity {
 
         addTasksSection();
 
-        sectionHeader("LEAVE REQUESTS", "View requests", () -> selectTab("Leave"));
-        if (leaveData.length() == 0) {
-            LinearLayout emptyLeave = card();
-            emptyLeave.addView(text("You have no leave requests yet.", 12, MUTED, false));
-            content.addView(emptyLeave, cardParams());
-        } else {
-            JSONObject latestLeave = leaveData.optJSONObject(0);
-            if (latestLeave != null) {
-                String status = latestLeave.optString("status");
-                LinearLayout leaveCard = card(leaveAccent(latestLeave.optString("status")));
-                LinearLayout row = new LinearLayout(this);
-                row.setGravity(Gravity.CENTER_VERTICAL);
-                row.addView(text(latestLeave.optString("kind"), 14, INK, true),
-                        new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
-                int statusColor = "Approved".equalsIgnoreCase(status)
-                        ? GREEN
-                        : "Rejected".equalsIgnoreCase(status)
-                                ? RED : BLUE;
-                int statusBackground = "Approved".equalsIgnoreCase(status)
-                        ? GREEN_BG
-                        : "Rejected".equalsIgnoreCase(status)
-                                ? RED_BG : TINT;
-                row.addView(statusBadge(status.toUpperCase(Locale.ROOT),
-                        statusColor, statusBackground));
-                leaveCard.addView(row);
-                leaveCard.addView(text(formatDate(latestLeave.optString("start")) + " – "
-                        + formatDate(latestLeave.optString("end")), 12, MUTED, false));
-                content.addView(leaveCard, cardParams());
-            }
-        }
+
     }
 
     private void showProfile() {
@@ -1123,6 +1198,10 @@ public class MainActivity extends Activity {
             executor.execute(() -> logoutOnServer(oldToken));
         }
         mainHandler.removeCallbacks(pollNotifications);
+        mainHandler.removeCallbacks(idleWatch);
+        dismissIdleWarning();
+        stopService(new android.content.Intent(this, LocationTrackingService.class));
+        approvalCount = 0;
         tokenStore.clear();
         loaded.clear();
         taskData = new JSONArray();
@@ -1465,6 +1544,9 @@ public class MainActivity extends Activity {
         content.removeAllViews();
         addPageHeading("MY DUTIES", "Published roster", "Your assigned shifts and duty details.");
         addProfileSummary();
+        Button dutyChange = button("🔄 Request a shift / duty change", BLUE);
+        dutyChange.setOnClickListener(v -> openModule(RoleAccess.ROSTER_REQUESTS));
+        content.addView(dutyChange, fieldParams());
         if (rosterData.length() == 0) {
             content.addView(cardMessage("No published roster assignments were found for your account."));
             return;
@@ -1526,65 +1608,12 @@ public class MainActivity extends Activity {
     }
 
     private void addLeaveForm() {
-        addPageHeading("REQUESTS", "Leave and outside movement",
-                "Requests go to the SHO / Admin SI (leave) or your authorizing officer (movement). You are notified of every decision.");
-        LinearLayout toggle = new LinearLayout(this);
-        toggle.setPadding(0, 0, 0, dp(12));
-        for (String mode : new String[]{"leave", "movement"}) {
-            boolean on = mode.equals(requestMode);
-            Button b = smallButton("leave".equals(mode) ? "Leave / rest" : "Outside movement", on ? BLUE : SURFACE, on ? Color.WHITE : BLUE);
-            b.setBackground(roundRect(on ? BLUE : SURFACE, on ? BLUE : LINE, 20));
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(42), 1);
-            lp.setMarginEnd(dp(8));
-            toggle.addView(b, lp);
-            b.setOnClickListener(v -> {
-                requestMode = mode;
-                renderTab("Leave");
-            });
-        }
-        content.addView(toggle);
-        if ("movement".equals(requestMode)) {
-            addMovementForm();
-            return;
-        }
-        LinearLayout form = card();
-        form.addView(text("REQUEST DETAILS", 10, BLUE, true));
-        addFieldLabel(form, "Leave type");
-        leaveKind = new Spinner(this);
-        ArrayAdapter<String> kinds = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item,
-                new String[]{"Casual", "Medical", "Rest day", "Duty off"});
-        kinds.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        leaveKind.setAdapter(kinds);
-        leaveKind.setPadding(dp(10), 0, dp(10), 0);
-        leaveKind.setBackground(roundRect(SURFACE, LINE, 8));
-        form.addView(leaveKind, fieldParams());
-        addFieldLabel(form, "Start date");
-        leaveStart = dateField(daysFromToday(1), null);
-        form.addView(leaveStart, fieldParams());
-        addFieldLabel(form, "End date");
-        leaveEnd = dateField(daysFromToday(1), leaveStart);
-        form.addView(leaveEnd, fieldParams());
-        leaveStart.setOnClickListener(v -> pickDate(leaveStart, null, leaveEnd));
-        Button request = button("Submit request", BLUE);
-        LinearLayout.LayoutParams params = fieldParams();
-        params.topMargin = dp(6);
-        form.addView(request, params);
-        request.setOnClickListener(v -> postLeave(request));
-        content.addView(form, cardParams());
-        TextView historyTitle = text("My leave requests", 19, INK, true);
-        historyTitle.setPadding(0, dp(12), 0, dp(2));
-        content.addView(historyTitle);
-        content.addView(text("Pending requests and future approved leave can be cancelled.", 12, MUTED, false));
-        leaveHistory = new LinearLayout(this);
-        leaveHistory.setOrientation(LinearLayout.VERTICAL);
-        LinearLayout.LayoutParams historyParams = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        historyParams.topMargin = dp(10);
-        content.addView(leaveHistory, historyParams);
+        addPageHeading("REQUESTS", "Outside movements", "Requests go to your authorizing officer.");
+        addMovementForm();
     }
 
     private void showLeave() {
-        if (!"Leave".equals(selectedTab) || leaveHistory == null) return;
+        if (!"Requests".equals(selectedTab) || leaveHistory == null) return;
         leaveHistory.removeAllViews();
         if ("movement".equals(requestMode)) {
             showMovements();
@@ -1618,7 +1647,7 @@ public class MainActivity extends Activity {
                 card.addView(cancel);
                 final int leaveId = item.optInt("id");
                 cancel.setOnClickListener(v -> confirm("Cancel this leave request?", () ->
-                        postSimple("/mobile/leave/" + leaveId + "/cancel", null, "Leave request cancelled", "Leave")));
+                        postSimple("/mobile/leave/" + leaveId + "/cancel", null, "Leave request cancelled", "Requests")));
             }
             leaveHistory.addView(card, cardParams());
         }
@@ -1683,7 +1712,7 @@ public class MainActivity extends Activity {
                 mainHandler.post(() -> {
                     toast("Leave request submitted. You will be notified of the decision.");
                     loaded.remove("Home");
-                    renderTab("Leave");
+                    renderTab("Requests");
                     refreshData();
                 });
             } catch (Exception exception) {
@@ -2087,7 +2116,41 @@ public class MainActivity extends Activity {
         renderWorkspace();
         selectTab(selectedTab);
         startPolling();
-        requestNotificationPermission();
+        if (!startLocationSharing()) requestNotificationPermission();
+    }
+
+    /** Asks for location permission (once per launch) and starts the 1-minute GPS reporting service. */
+    private boolean startLocationSharing() {
+        if (token == null) return false;
+        boolean granted = checkSelfPermission("android.permission.ACCESS_FINE_LOCATION") == android.content.pm.PackageManager.PERMISSION_GRANTED
+                || checkSelfPermission("android.permission.ACCESS_COARSE_LOCATION") == android.content.pm.PackageManager.PERMISSION_GRANTED;
+        if (granted) {
+            android.content.Intent intent = new android.content.Intent(this, LocationTrackingService.class);
+            intent.putExtra(LocationTrackingService.EXTRA_URL, apiUrl("/mobile/location"));
+            try {
+                if (android.os.Build.VERSION.SDK_INT >= 26) startForegroundService(intent); else startService(intent);
+            } catch (RuntimeException exception) {
+                // Background start restrictions: sharing resumes the next time the app is opened.
+            }
+        } else if (!locationAsked) {
+            locationAsked = true;
+            toast("Location access lets the station see your position on duty. It is shared once a minute while you are signed in.");
+            requestPermissions(new String[]{"android.permission.ACCESS_FINE_LOCATION", "android.permission.ACCESS_COARSE_LOCATION"}, 42);
+            return true;
+        }
+        return false;
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == 42) {
+            boolean ok = false;
+            for (int r : grantResults) ok |= r == android.content.pm.PackageManager.PERMISSION_GRANTED;
+            if (ok) startLocationSharing();
+            else toast("Location sharing is off. Allow location in Settings to appear on the live map.");
+            requestNotificationPermission();
+        }
     }
 
     private void logoutOnServer(String oldToken) {
@@ -2129,7 +2192,7 @@ public class MainActivity extends Activity {
         panel.addView(title);
         TextView sub = text(required
                 ? "Your account uses a temporary password. Choose your own before continuing."
-                : "At least 10 characters, with letters and numbers.", 11, Color.rgb(167, 183, 201), false);
+                : "Use letters and numbers (any length), not your username.", 11, Color.rgb(167, 183, 201), false);
         sub.setGravity(Gravity.CENTER);
         sub.setPadding(0, dp(4), 0, dp(14));
         panel.addView(sub);
@@ -2165,7 +2228,7 @@ public class MainActivity extends Activity {
         save.setOnClickListener(v -> {
             String cur = current.getText().toString();
             String pw = fresh.getText().toString();
-            String problem = pw.length() < 10 ? "Use at least 10 characters."
+            String problem = pw.isEmpty() ? "Enter a new password."
                     : !pw.matches(".*[A-Za-z].*") || !pw.matches(".*\\d.*") ? "Use both letters and numbers."
                     : !pw.equals(confirmField.getText().toString()) ? "The new passwords do not match."
                     : cur.isEmpty() ? "Enter your current password." : null;
@@ -2273,7 +2336,7 @@ public class MainActivity extends Activity {
                 request("/mobile/movements", "POST", body, false);
                 mainHandler.post(() -> {
                     toast("Movement request sent for authorization.");
-                    renderTab("Leave");
+                    renderTab("Requests");
                     refreshData();
                 });
             } catch (Exception e) {
@@ -2314,12 +2377,12 @@ public class MainActivity extends Activity {
                 Button cancel = smallButton("Cancel request", RED_BG, RED);
                 card.addView(cancel);
                 cancel.setOnClickListener(v -> confirm("Cancel this movement request?", () ->
-                        postSimple("/mobile/movements/" + id + "/cancel", null, "Movement request cancelled", "Leave")));
+                        postSimple("/mobile/movements/" + id + "/cancel", null, "Movement request cancelled", "Requests")));
             } else if ("authorized".equals(status) || "open".equals(status) || "overdue".equals(status)) {
                 Button back = smallButton("I have returned", GREEN_BG, GREEN);
                 card.addView(back);
                 back.setOnClickListener(v -> confirm("Record your return to the station now?", () ->
-                        postSimple("/mobile/movements/" + id + "/return", null, "Return recorded", "Leave")));
+                        postSimple("/mobile/movements/" + id + "/return", null, "Return recorded", "Requests")));
             }
             leaveHistory.addView(card, cardParams());
         }
@@ -2428,7 +2491,7 @@ public class MainActivity extends Activity {
         if (android.os.Build.VERSION.SDK_INT >= 26) {
             android.app.NotificationChannel channel = new android.app.NotificationChannel(
                     NOTIFY_CHANNEL, "Duty updates", android.app.NotificationManager.IMPORTANCE_DEFAULT);
-            channel.setDescription("Published duties, leave and movement decisions, tasks");
+            channel.setDescription("Published duties, movement decisions, tasks");
             getSystemService(android.app.NotificationManager.class).createNotificationChannel(channel);
         }
     }
@@ -2531,14 +2594,14 @@ public class MainActivity extends Activity {
             card.setOnClickListener(v -> {
                 if (!read) postSimple("/notifications/" + id + "/read", null, null, null);
                 if (!isStaffRole()) {
-                    String module = RoleAccess.moduleForEntity(entity);
-                    if (module != null && RoleAccess.canSee(module, role())) openModule(module);
+                    String target = RoleAccess.targetForEntity(entity);
+                    if (target != null && RoleAccess.canSee(target, role())) openModule(target);
                     return;
                 }
                 String target = "Roster".equals(entity) ? "Roster" : "Task".equals(entity) ? "Home"
-                        : "LeaveRequest".equals(entity) || "Movement".equals(entity) ? "Leave" : null;
+                        : "Movement".equals(entity) ? "Requests" : null;
                 if ("Movement".equals(entity)) requestMode = "movement";
-                if ("LeaveRequest".equals(entity)) requestMode = "leave";
+                
                 if (target != null) selectTab(target);
             });
             content.addView(card, cardParams());

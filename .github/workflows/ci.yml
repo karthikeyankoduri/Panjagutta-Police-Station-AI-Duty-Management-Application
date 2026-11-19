@@ -69,4 +69,34 @@ jobs:
           distribution: temurin
           java-version: "17"
       - uses: android-actions/setup-android@v3
-      - run: chmod +x gradlew && ./gradlew assembleDebug --no-daemon
+      # RoleAccessTest asserts the app against frontend/src/lib/access-matrix.json (the shared web/app rules).
+      - run: chmod +x gradlew && ./gradlew testDebugUnitTest assembleDebug --no-daemon
+
+  flutter-mobile:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: mobile-flutter
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.4'
+          cache: true
+      - uses: actions/setup-java@v4
+        if: runner.os == 'Linux'
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        if: runner.os == 'Linux'
+      - run: flutter pub get --enforce-lockfile
+      - run: flutter analyze --no-pub
+      - run: flutter test --no-pub
+      - run: flutter build apk --debug --no-pub
+        if: runner.os == 'Linux'
+      - run: flutter build ios --simulator --no-pub
+        if: runner.os == 'macOS'

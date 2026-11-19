@@ -163,3 +163,17 @@ def test_mobile_diary_rejects_invalid_or_oversized_ranges(start_date, end_date):
         ))
 
     assert error.value.status_code == 422
+
+
+async def test_duty_options_available_to_staff(client, db, make):
+    from sqlalchemy import select
+    from app.models.models import DutyMaster, UserRoleEnum
+    from conftest import login
+    staff = await make.staff()
+    user = await make.user(UserRoleEnum.STAFF, staff=staff)
+    r = await client.get("/api/mobile/duty-options", headers=await login(client, user))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    seeded = {c for c in (await db.execute(select(DutyMaster.category).where(DutyMaster.is_active == True))).scalars().all()}
+    assert seeded and set(body["duty_categories"]) == seeded
+    assert isinstance(body["shifts"], list)

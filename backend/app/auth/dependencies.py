@@ -111,6 +111,8 @@ def require_roles(*roles: UserRoleEnum):
                 detail=f"Access denied. Required roles: {[r.value for r in roles]}",
             )
         return current_user
+    # Exposed so the API contract test can list who may call each endpoint.
+    check.allowed_roles = tuple(r.value for r in roles)
     return check
 
 

@@ -506,7 +506,7 @@ When `SEED_DEMO_DATA=true` in `.env`, these accounts are created automatically o
 |---|---|---|---|
 | Super Admin | `superadmin` | `SuperAdmin@2024!` | — |
 | Admin SI | `admin_si_demo` | `Demo@AdminSI#2024!` | `admin123` |
-| SHO | `sho_panjagutta` | `Password@PJ2024!` | — |
+| SHO | `sho_panjagutta` | `PJ@2024` | — |
 | SHO (alt) | `sho_demo` | `Demo@SHO#2024!` | — |
 | Sector 1 SI | `sector1_si_demo` | `Demo@Sec1SI#2024!` | — |
 | DI | `di_demo` | `Demo@DI#2024!` | — |

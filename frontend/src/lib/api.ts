@@ -49,6 +49,38 @@ export interface StaffMember {
   user_id?: number | null;
   user_username?: string | null;
   user_role?: string | null;
+  // Live GPS (only sent to Admin / Super Admin)
+  location_name?: string | null;
+  location_lat?: number | null;
+  location_lng?: number | null;
+  location_updated?: string | null;
+}
+
+export interface LiveLocation {
+  staff_id: number;
+  service_number: string;
+  name: string;
+  designation: string;
+  sector_name: string | null;
+  latitude: number;
+  longitude: number;
+  location_name: string | null;
+  last_updated: string;
+}
+
+export function googleMapsUrl(lat: number, lng: number): string {
+  return `https://www.google.com/maps?q=${lat},${lng}`;
+}
+
+export function timeAgo(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const mins = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins} min${mins === 1 ? "" : "s"} ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs} hr${hrs === 1 ? "" : "s"} ago`;
+  const days = Math.floor(hrs / 24);
+  return `${days} day${days === 1 ? "" : "s"} ago`;
 }
 
 export interface StaffStatusRow {
@@ -564,6 +596,61 @@ export async function getStaff(
   return json(await authFetch(token, `/staff/?${qs}`), "Failed to fetch staff");
 }
 
+export async function getLiveLocations(token: string): Promise<LiveLocation[]> {
+  return json(await authFetch(token, "/locations/"), "Failed to load live locations");
+}
+
+// ─── Chat ───────────────────────────────────────────────────────────────────
+
+export interface ChatThread {
+  thread_user_id: number | null; // null = Station channel
+  title: string;
+  subtitle?: string;
+  phone?: string | null; // only sent to superiors, so they can search people by number
+  kind: "station" | "direct";
+  unread: number;
+  last: { body: string; created_at: string | null } | null;
+}
+
+export interface ChatMessage {
+  id: number;
+  thread_user_id: number | null;
+  kind: "direct" | "channel" | "broadcast";
+  body: string;
+  sender_user_id: number;
+  sender_name: string;
+  sender_role: string;
+  mine: boolean;
+  created_at: string | null;
+}
+
+export async function getChatThreads(token: string): Promise<{ can_broadcast: boolean; threads: ChatThread[] }> {
+  return json(await authFetch(token, "/chat/threads"), "Failed to load chats");
+}
+
+export async function getChatMessages(token: string, threadUserId: number | null, sinceId?: number): Promise<ChatMessage[]> {
+  const q = new URLSearchParams();
+  if (threadUserId) q.set("thread_user_id", String(threadUserId));
+  if (sinceId) q.set("since_id", String(sinceId));
+  const data = await json(await authFetch(token, `/chat/messages${q.toString() ? `?${q}` : ""}`), "Failed to load messages");
+  return data.items;
+}
+
+export async function sendChatMessage(token: string, threadUserId: number | null, body: string): Promise<ChatMessage> {
+  return json(
+    await authFetch(token, "/chat/messages", { method: "POST", body: JSON.stringify({ body, thread_user_id: threadUserId }) }),
+    "Failed to send message"
+  );
+}
+
+export async function broadcastChat(token: string, body: string): Promise<ChatMessage> {
+  return json(await authFetch(token, "/chat/broadcast", { method: "POST", body: JSON.stringify({ body }) }), "Failed to send to everyone");
+}
+
+export async function markChatRead(token: string, threadUserId: number | null): Promise<void> {
+  await json(await authFetch(token, "/chat/read", { method: "POST", body: JSON.stringify({ thread_user_id: threadUserId }) }), "Failed to mark read");
+}
+
 export async function createStaff(token: string, data: Partial<StaffMember>): Promise<StaffMember> {
   return json(await authFetch(token, "/staff/", { method: "POST", body: JSON.stringify(data) }), "Failed to create staff");
 }
@@ -599,6 +686,56 @@ export async function importStaffCsv(
     res = await authFetch(token, "/staff/import-csv", { method: "POST", body: formData });
   }
   return json(res, "CSV Import failed");
+}
+
+/** Read a CSV / Excel file into an editable grid (headers + rows). Saves nothing. */
+export interface UsernamePlanRow {
+  user_id: number;
+  staff_id: number;
+  name: string;
+  designation: string;
+  phone: string | null;
+  current_username: string;
+  new_username: string | null;
+  note: string;
+  will_change: boolean;
+}
+
+export async function getUsernameSuggestion(
+  token: string,
+  designation: string,
+  phone: string,
+  excludeUserId?: number | null
+): Promise<string | null> {
+  const q = new URLSearchParams({ designation, phone });
+  if (excludeUserId) q.set("exclude_user_id", String(excludeUserId));
+  const res = await json<{ username: string | null }>(
+    await authFetch(token, `/staff/username-suggestion?${q}`),
+    "Could not suggest a username"
+  );
+  return res.username;
+}
+
+export async function previewUsernameConversion(
+  token: string
+): Promise<{ rows: UsernamePlanRow[]; will_change: number; skipped_no_phone: number }> {
+  return json(await authFetch(token, "/staff/usernames/preview", { method: "POST" }), "Could not build the username preview");
+}
+
+export async function applyUsernameConversion(
+  token: string,
+  changes: { user_id: number; new_username: string }[]
+): Promise<{ changed: number; credentials: { name: string; old_username: string; new_username: string }[] }> {
+  return json(
+    await authFetch(token, "/staff/usernames/apply", { method: "POST", body: JSON.stringify({ changes }) }),
+    "Could not apply the username changes"
+  );
+}
+
+export async function previewStaffImport(token: string, file: File): Promise<{ headers: string[]; rows: string[][]; row_count: number; username_notes?: string[] }> {
+  const formData = new FormData();
+  formData.append("file", file);
+  return json(await authFetch(token, "/staff/import-preview", { method: "POST", body: formData }), "Could not read the file for preview");
 }
 
 export async function downloadStaffTemplate(token: string) {
@@ -760,6 +897,74 @@ export async function updateRosterAssignments(token: string, rosterId: number, d
   return json(await authFetch(token, `/rosters/${rosterId}/assignments`, { method: "PUT", body: JSON.stringify(data) }), "Failed to save duty assignments");
 }
 
+// ─── Weekly allocation (staff x day grid) ──────────────────────────────────
+
+export interface WeekCellIn {
+  staff_id: number;
+  date: string;
+  shift_code: string;
+  duty_master_id: number;
+  notes?: string | null;
+  is_exception?: boolean;
+  exception_reason?: string | null;
+  exception_authorized_by_id?: number | null;
+}
+
+export interface WeekCellOut extends WeekCellIn {
+  staff_name: string;
+  service_number: string;
+  designation: string;
+  duty_category: string;
+  roster_id: number;
+  roster_status: string;
+  editable: boolean;
+}
+
+export interface WeekGrid {
+  week_start: string;
+  week_end: string;
+  days: string[];
+  rosters: Array<{ id: number; date: string; shift_code: string; version: number; status: string; editable: boolean }>;
+  cells: WeekCellOut[];
+}
+
+export interface WeekIssue extends ValidationIssue {
+  date: string;
+  shift_code: string;
+  /** Index into the submitted `cells` array; null for roster-level notes such as vacancies. */
+  cell_index: number | null;
+}
+
+export interface WeekSaveResult {
+  week_start: string;
+  week_end: string;
+  days: Array<{ date: string; shift_code: string; action: "created" | "updated" | "unchanged" | "skipped"; roster_id: number; status: string; reason?: string }>;
+  issues: WeekIssue[];
+  blocking_count: number;
+  can_save: boolean;
+  warnings: string[];
+  detail?: string;
+}
+
+export interface WeekPayload {
+  week_start: string;
+  staff_ids: number[];
+  cells: WeekCellIn[];
+  change_reason?: string;
+}
+
+export async function getRosterWeek(token: string, start: string): Promise<WeekGrid> {
+  return json(await authFetch(token, `/rosters/week?start=${start}`), "Failed to load the weekly allocation");
+}
+
+export async function validateRosterWeek(token: string, data: WeekPayload): Promise<WeekSaveResult> {
+  return json(await authFetch(token, "/rosters/week/validate", { method: "POST", body: JSON.stringify(data) }), "Validation failed");
+}
+
+export async function saveRosterWeek(token: string, data: WeekPayload): Promise<WeekSaveResult> {
+  return json(await authFetch(token, "/rosters/week", { method: "PUT", body: JSON.stringify(data) }), "Failed to save the weekly allocation");
+}
+
 // ─── Duty Change Requests ──────────────────────────────────────────────────
 
 export interface DutyChangeRequest {
@@ -803,6 +1008,28 @@ export async function submitDutyChangeRequest(
   }
 ): Promise<DutyChangeRequest> {
   return json(await authFetch(token, "/rosters/change-requests/", { method: "POST", body: JSON.stringify(data) }), "Failed to submit duty change request");
+}
+
+export interface DutyOptions {
+  shifts: { code: string; start_time: string; end_time: string }[];
+  duty_categories: string[];
+}
+
+export interface MyPublishedDuty {
+  roster_id: number;
+  duty_date: string;
+  shift_name: string;
+  duty_category: string;
+}
+
+/** Shift codes with timings and duty points, for the change-request dropdowns (any signed-in user). */
+export async function getDutyOptions(token: string): Promise<DutyOptions> {
+  return json(await authFetch(token, "/mobile/duty-options"), "Failed to load duty options");
+}
+
+/** The signed-in officer's own published duties (fails for logins without a staff profile). */
+export async function getMyPublishedDuties(token: string): Promise<MyPublishedDuty[]> {
+  return json(await authFetch(token, "/mobile/rosters"), "Failed to load your duties");
 }
 
 export async function approveDutyChangeRequest(token: string, id: number, remarks?: string): Promise<DutyChangeRequest> {

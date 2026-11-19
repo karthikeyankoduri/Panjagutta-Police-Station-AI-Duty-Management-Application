@@ -18,18 +18,18 @@ async def test_wrong_password_locks_account(client, make):
 
 async def test_no_backdoor_passwords(client, make):
     u = await make.user(UserRoleEnum.ADMIN_SI, username="admin_si_demo")
-    for pw in ("admin123", "staff123", "Password@PJ2024!"):
+    for pw in ("admin123", "staff123", "PJ@2024"):
         assert (await client.post("/api/auth/login", json={"username": u.username, "password": pw})).status_code == 401
 
 
 async def test_default_password_forces_change(client, make):
-    u = await make.user(UserRoleEnum.STAFF, password="Password@PJ2024!")
-    r = await client.post("/api/auth/login", json={"username": u.username, "password": "Password@PJ2024!"})
+    u = await make.user(UserRoleEnum.STAFF, password="PJ@2024")
+    r = await client.post("/api/auth/login", json={"username": u.username, "password": "PJ@2024"})
     assert r.json()["must_change_password"] is True
     h = {"Authorization": f"Bearer {r.json()['access_token']}"}
     assert (await client.get("/api/leave/", headers=h)).status_code == 403
     weak = await client.post("/api/auth/change-password", headers=h,
-                             json={"current_password": "Password@PJ2024!", "new_password": "short"})
+                             json={"current_password": "PJ@2024", "new_password": "short"})
     assert weak.status_code == 422
 
 

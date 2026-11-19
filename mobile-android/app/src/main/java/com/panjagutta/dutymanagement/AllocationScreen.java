@@ -39,9 +39,16 @@ final class AllocationScreen extends ModuleScreen {
     private JSONArray issues = new JSONArray();
     private JSONArray restorable;
     private boolean dirty;
+    /** Week (by officer) view; the Day view below stays as it was. */
+    private boolean weekMode;
+    private final WeekAllocationScreen week;
 
     AllocationScreen(MainActivity a) {
         super(a);
+        week = new WeekAllocationScreen(a, () -> {
+            weekMode = false;
+            show();
+        });
         date = a.allocationDate != null ? a.allocationDate : a.today();
         if (a.allocationShift != null) shift = a.allocationShift;
         a.allocationDate = null;
@@ -58,6 +65,11 @@ final class AllocationScreen extends ModuleScreen {
 
     @Override
     void show() {
+        if (weekMode) {
+            week.host = host; // the week view draws the same tab strip and is "active" with this screen
+            week.show();
+            return;
+        }
         load(() -> {
             Object[] r = new Object[8];
             r[0] = a.requestArray("/staff/?is_active=true");
@@ -213,11 +225,23 @@ final class AllocationScreen extends ModuleScreen {
         heading("DUTY ALLOCATION", "Duty Allocation Workspace",
                 "Shift " + shift + (time == null ? "" : " (" + time + ")") + " on " + day(date)
                         + " · required, allocated and vacant strength per duty");
+        tabs(new String[]{"Day (by duty point)", "Week (by officer)"}, 0, i -> {
+            if (i == 1) openWeek();
+        });
         addControls();
         if (restorable != null) addRestoreBanner();
         addStatusCard();
         addIssues();
         addDuties();
+    }
+
+    private void openWeek() {
+        Runnable go = () -> {
+            weekMode = true;
+            show();
+        };
+        if (dirty) confirm("You have unsaved allocation changes. Continue without saving them?", go);
+        else go.run();
     }
 
     private void addControls() {
@@ -653,7 +677,7 @@ final class AllocationScreen extends ModuleScreen {
             }
             final JSONObject res = result;
             a.mainHandler.post(() -> {
-                if (a.current != this) return;
+                if (!active()) return;
                 if (res != null) {
                     issues = arr(res, "issues");
                     if (then == null) render();

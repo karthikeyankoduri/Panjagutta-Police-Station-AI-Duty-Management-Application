@@ -57,7 +57,7 @@ def generate_140():
         "email": "eeraboinajahangeer@gmail.com",
         "date_of_joining": "2010-06-01",
         "username": "sho_panjagutta",
-        "password": "Password@PJ2024!",
+        "password": "PJ@2024",
         "role": "SHO",
         "notes": "Station House Officer - Overall Station In-charge"
     })
@@ -74,7 +74,7 @@ def generate_140():
         "contact_phone": "9848012002",
         "date_of_joining": "2012-08-15",
         "username": "di_panjagutta",
-        "password": "Password@PJ2024!",
+        "password": "PJ@2024",
         "role": "DI",
         "notes": "Detective Officer - Head of Station Investigations"
     })
@@ -91,7 +91,7 @@ def generate_140():
         "contact_phone": "9848012003",
         "date_of_joining": "2015-01-10",
         "username": "admin_si_panjagutta",
-        "password": "Password@PJ2024!",
+        "password": "PJ@2024",
         "role": "ADMIN_SI",
         "notes": "Admin Sub-Inspector - Rosters, muster roll & staff allocation"
     })
@@ -108,7 +108,7 @@ def generate_140():
         "contact_phone": "9848012004",
         "date_of_joining": "2016-04-20",
         "username": "dsi_panjagutta",
-        "password": "Password@PJ2024!",
+        "password": "PJ@2024",
         "role": "DSI",
         "notes": "Duty Sub-Inspector - Daily station watch & sentry checks"
     })
@@ -133,7 +133,7 @@ def generate_140():
             "contact_phone": f"98480120{10+idx}",
             "date_of_joining": f"2016-0{idx}-15",
             "username": uname,
-            "password": "Password@PJ2024!",
+            "password": "PJ@2024",
             "role": "SECTOR_SI",
             "notes": f"Sector {idx} Sub-Inspector Field In-charge"
         })
@@ -161,7 +161,7 @@ def generate_140():
             "contact_phone": f"98480120{20+idx}",
             "date_of_joining": f"2017-0{min(idx,9)}-10",
             "username": uname,
-            "password": "Password@PJ2024!",
+            "password": "PJ@2024",
             "role": "STAFF",
             "notes": f"Specialized Wing SI - {sec}"
         })
@@ -192,7 +192,7 @@ def generate_140():
             "contact_phone": f"98480120{30+idx}",
             "date_of_joining": f"2013-0{min(idx,9)}-05",
             "username": f"pj_asi_{idx:02d}",
-            "password": "Password@PJ2024!",
+            "password": "PJ@2024",
             "role": "STAFF",
             "notes": duty_desc
         })
@@ -235,7 +235,7 @@ def generate_140():
             "contact_phone": f"98480121{idx:02d}",
             "date_of_joining": f"2014-{(idx%12)+1:02d}-12",
             "username": f"pj_hc_{idx:02d}",
-            "password": "Password@PJ2024!",
+            "password": "PJ@2024",
             "role": "STAFF",
             "notes": duty_name
         })
@@ -274,7 +274,7 @@ def generate_140():
             "contact_phone": f"98480122{idx:02d}",
             "date_of_joining": f"2018-{(idx%12)+1:02d}-01",
             "username": f"pj_pc_s{idx:02d}",
-            "password": "Password@PJ2024!",
+            "password": "PJ@2024",
             "role": "STAFF",
             "notes": duty
         })
@@ -297,7 +297,7 @@ def generate_140():
             "contact_phone": f"98480123{idx:02d}",
             "date_of_joining": f"2019-{(idx%12)+1:02d}-15",
             "username": f"pj_pc_{idx:03d}",
-            "password": "Password@PJ2024!",
+            "password": "PJ@2024",
             "role": "STAFF",
             "notes": f"Sector {sector_id} Beat Patrol Constable"
         })
@@ -319,7 +319,7 @@ def generate_140():
             "contact_phone": f"98480124{idx:02d}",
             "date_of_joining": f"2017-{(idx%12)+1:02d}-20",
             "username": f"pj_arpc_{idx:02d}",
-            "password": "Password@PJ2024!",
+            "password": "PJ@2024",
             "role": "STAFF",
             "notes": duty
         })
@@ -351,7 +351,7 @@ def generate_140():
             "contact_phone": f"98480125{idx:02d}",
             "date_of_joining": f"2016-{(idx%12)+1:02d}-10",
             "username": f"pj_drv_{idx:02d}",
-            "password": "Password@PJ2024!",
+            "password": "PJ@2024",
             "role": "STAFF",
             "notes": duty
         })
@@ -373,7 +373,7 @@ def generate_140():
             "contact_phone": f"98480126{idx:02d}",
             "date_of_joining": f"2020-{(idx%12)+1:02d}-01",
             "username": f"pj_hg_{idx:02d}",
-            "password": "Password@PJ2024!",
+            "password": "PJ@2024",
             "role": "STAFF",
             "notes": duty
         })
@@ -393,7 +393,7 @@ def generate_140():
             "contact_phone": f"98480127{idx:02d}",
             "date_of_joining": f"2021-0{idx}-01",
             "username": f"pj_spo_{idx:02d}",
-            "password": "Password@PJ2024!",
+            "password": "PJ@2024",
             "role": "STAFF",
             "notes": duty
         })

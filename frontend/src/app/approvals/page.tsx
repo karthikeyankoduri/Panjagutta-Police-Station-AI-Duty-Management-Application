@@ -7,8 +7,6 @@ import {
   getInbox,
   approveRoster,
   rejectRoster,
-  approveLeave,
-  rejectLeave,
   authorizeMovement,
   rejectMovement,
   resolveAlert,
@@ -89,7 +87,7 @@ export default function ApprovalsPage() {
       <div className="page-header">
         <div>
           <h1 className="page-title">Approvals &amp; Alerts</h1>
-          <div className="page-subtitle">Everything waiting on you: roster approvals, leave decisions, movement authorizations and alerts.</div>
+          <div className="page-subtitle">Everything waiting on you: roster approvals, movement authorizations and alerts.</div>
         </div>
         <button className="btn btn-secondary btn-sm" onClick={loadData}>↻ Refresh</button>
       </div>
@@ -103,13 +101,13 @@ export default function ApprovalsPage() {
       {/* AI Advisory Query Assistant */}
       <div className="card" style={{ marginBottom: 24, borderColor: "#0284c7" }}>
         <div className="card__header" style={{ background: "rgba(2, 132, 199, 0.1)" }}>
-          <span className="card__title" style={{ color: "#38bdf8" }}>🤖 AI Station Copilot &middot; Natural Language Query</span>
+          <span className="card__title" style={{ color: "#38bdf8" }}>AI Station Copilot &middot; Natural Language Query</span>
           <span style={{ fontSize: 12, color: "#94a3b8" }}>On-Premises &middot; Explainable</span>
         </div>
         <div className="card__body">
           <form onSubmit={handleAskAI} style={{ display: "flex", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
             <input type="text" className="form-control" value={aiQueryText} onChange={(e) => setAiQueryText(e.target.value)}
-              placeholder="Ask station copilot: 'Who is on leave today?', 'Are there overdue movements?', 'What is Sector 1 strength?'..."
+              placeholder="Ask station copilot: 'Are there overdue movements?', 'What is Sector 1 strength?'..."
               style={{ flex: 1, minWidth: 220 }} aria-label="Ask the station copilot" />
             <button type="submit" className="btn btn-primary" disabled={aiLoading}>{aiLoading ? "Querying..." : "Ask Copilot"}</button>
           </form>
@@ -124,9 +122,8 @@ export default function ApprovalsPage() {
 
       <div className="stats-grid-4">
         {[
-          ["Total waiting", c?.total ?? 0, (c?.total ?? 0) > 0 ? "#eab308" : "#22c55e"],
+          ["Total waiting", Math.max(0, (c?.total ?? 0) - (c?.leave ?? 0)), (Math.max(0, (c?.total ?? 0) - (c?.leave ?? 0))) > 0 ? "#eab308" : "#22c55e"],
           ["Rosters to approve", c?.rosters ?? 0, "#38bdf8"],
-          ["Leave decisions", c?.leave ?? 0, "#eab308"],
           ["Duty changes", dutyRequests.length, dutyRequests.length > 0 ? "#f43f5e" : "#22c55e"],
           ["Movements to authorize", c?.movements ?? 0, "#f97316"],
           ["Open alerts", c?.alerts ?? 0, (c?.alerts ?? 0) > 0 ? "#ef4444" : "#22c55e"],
@@ -171,36 +168,7 @@ export default function ApprovalsPage() {
             </Section>
           )}
 
-          {canDecideLeave && (
-            <Section title={`Leave requests (${inbox.leave.length})`} empty="No pending leave requests." show={true} count={inbox.leave.length}>
-              <table className="table">
-                <thead><tr><th>Reference</th><th>Officer</th><th>Type</th><th>Dates</th><th>Action</th></tr></thead>
-                <tbody>
-                  {inbox.leave.map((l) => (
-                    <tr key={l.id}>
-                      <td>{l.reference_number || `#${l.id}`}</td>
-                      <td><strong>{l.staff_name || `Staff #${l.staff_id}`}</strong><div className="text-muted" style={{ fontSize: 11 }}>{l.service_number}</div></td>
-                      <td><span className="badge badge-default">{l.leave_type}</span></td>
-                      <td>{l.start_date} to {l.end_date}</td>
-                      <td style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                        <Link className="btn btn-success btn-sm" href="/leave">Review &amp; approve</Link>
-                        <button className="btn btn-danger btn-sm" onClick={() => {
-                          const remarks = ask("Reason for rejection (required, shown to the officer):");
-                          if (remarks) act(() => rejectLeave(token!, l.id, remarks), `Leave ${l.reference_number || l.id} rejected.`);
-                        }}>Reject</button>
-                        <button className="btn btn-secondary btn-sm" onClick={() => {
-                          const remarks = ask("Approval remarks (optional). Check the roster impact on the Leave page for vacancies:");
-                          if (remarks !== null) act(() => approveLeave(token!, l.id, remarks || undefined), `Leave ${l.reference_number || l.id} approved.`);
-                        }}>Quick approve</button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </Section>
-          )}
-
-          {canSupervise && (
+{canSupervise && (
             <Section title={`Movement requests awaiting authorization (${inbox.movements.length})`} empty="No pending movement requests." show={true} count={inbox.movements.length}>
               <table className="table">
                 <thead><tr><th>#</th><th>Officer</th><th>Destination</th><th>Purpose</th><th>Expected return</th><th>Action</th></tr></thead>

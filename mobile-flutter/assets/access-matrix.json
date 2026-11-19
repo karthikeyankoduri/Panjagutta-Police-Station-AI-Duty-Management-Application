@@ -1,0 +1,65 @@
+{
+  "_comment": "Single source of truth for who sees what. Read by the web AppShell, asserted by the Android RoleAccessTest and by backend/tests/test_access_matrix.py. Change a rule here and all three must agree, or CI fails. The server (require_roles) still enforces every permission.",
+  "roles": ["SUPER_ADMIN", "SHO", "ADMIN_SI", "SECTOR_SI", "DI", "DSI", "STAFF"],
+  "groups": {
+    "ALL": ["SUPER_ADMIN", "SHO", "ADMIN_SI", "SECTOR_SI", "DI", "DSI", "STAFF"],
+    "OFFICERS": ["SUPER_ADMIN", "SHO", "ADMIN_SI", "SECTOR_SI", "DI", "DSI"],
+    "SUPERVISORS": ["SUPER_ADMIN", "SHO", "ADMIN_SI", "SECTOR_SI"],
+    "ADMINS": ["SUPER_ADMIN", "SHO", "ADMIN_SI"],
+    "ADMIN_ONLY": ["SUPER_ADMIN", "ADMIN_SI"],
+    "SHO_ONLY": ["SUPER_ADMIN", "SHO"]
+  },
+  "modules": [
+    { "id": "dashboard", "label": "Dashboard", "href": "/dashboard", "group": "OFFICERS", "probe": { "method": "GET", "path": "/api/dashboard/summary" } },
+    { "id": "roster", "label": "Roster & Duty", "href": "/roster", "group": "ALL" },
+    { "id": "attendance", "label": "Attendance", "href": "/attendance", "group": "ALL" },
+    { "id": "tasks", "label": "Tasks", "href": "/tasks", "group": "ALL" },
+    { "id": "movements", "label": "Outside Movements", "href": "/movements", "group": "ALL" },
+    { "id": "attachments", "label": "Attachments", "href": "/attachments", "group": "OFFICERS", "probe": { "method": "GET", "path": "/api/attachments/" } },
+    { "id": "approvals", "label": "Approvals & Alerts", "href": "/approvals", "group": "OFFICERS", "probe": { "method": "GET", "path": "/api/dashboard/inbox" } },
+    { "id": "reports", "label": "Reports", "href": "/reports", "group": "OFFICERS", "probe": { "method": "GET", "path": "/api/reports/daily" } },
+    { "id": "policy", "label": "Policy & Shifts", "href": "/policy", "group": "ADMINS", "probe": { "method": "PUT", "path": "/api/policy/shifts/ZZ" } },
+    { "id": "config", "label": "Administration", "href": "/config", "group": "ADMIN_ONLY", "probe": { "method": "PUT", "path": "/api/config/dashboard-cards" } },
+    { "id": "audit", "label": "Audit Log", "href": "/audit", "group": "ADMIN_ONLY", "probe": { "method": "GET", "path": "/api/audit/" } },
+    { "id": "locations", "label": "Live Locations", "href": "/locations", "group": "ADMIN_ONLY", "probe": { "method": "GET", "path": "/api/locations/" } },
+    { "id": "guide", "label": "Workflow Guide", "href": "/guide", "group": "ALL" }
+  ],
+  "tabs": {
+    "roster": [
+      { "id": "rosters", "label": "Rosters", "group": "ALL" },
+      { "id": "allocation", "label": "Allocation", "group": "SUPERVISORS" },
+      { "id": "requests", "label": "Requests", "group": "ALL" }
+    ],
+    "config": [
+      { "id": "staff", "label": "Staff & CSV Import", "group": "ADMIN_ONLY" },
+      { "id": "duties", "label": "Duty requirements", "group": "ADMIN_ONLY" },
+      { "id": "sectors", "label": "Sectors", "group": "ADMIN_ONLY" },
+      { "id": "sections", "label": "Sections", "group": "ADMIN_ONLY" },
+      { "id": "lists", "label": "Status & state lists", "group": "ADMIN_ONLY" },
+      { "id": "cards", "label": "Dashboard cards", "group": "ADMIN_ONLY" }
+    ]
+  },
+  "actions": {
+    "roster.create": "ADMINS",
+    "roster.submit": "ADMIN_ONLY",
+    "roster.approve": "SHO_ONLY",
+    "roster.publish": "ADMINS",
+    "roster.revise": "ADMINS",
+    "roster.explain": "OFFICERS",
+    "roster.viewDrafts": "SUPERVISORS",
+    "allocation.edit": "ADMINS",
+    "dutyChange.decide": "ADMINS",
+    "leave.approve": "ADMINS",
+    "movement.authorize": "SUPERVISORS",
+    "tasks.manage": "SUPERVISORS",
+    "tasks.viewAll": "OFFICERS",
+    "attendance.rollCall": "OFFICERS",
+    "alerts.resolve": "SUPERVISORS",
+    "attachments.manage": "ADMINS",
+    "staff.manage": "ADMIN_ONLY",
+    "config.write": "ADMIN_ONLY",
+    "policy.signoff": "SHO_ONLY",
+    "policy.edit": "ADMINS",
+    "ai.ask": "OFFICERS"
+  }
+}

@@ -221,9 +221,9 @@ export default function ConfigPage() {
       {tab === "lists" && (
         <>
           <div className="alert-banner alert-banner--info" style={{ marginBottom: 16 }}>
-            Status codes drive the availability engine and cannot be renamed, but their labels, descriptions, order and visibility can be edited. New leave types can be added.
+            Status codes drive the availability engine and cannot be renamed, but their labels, descriptions, order and visibility can be edited.
           </div>
-          {Object.entries(lists).filter(([name]) => name !== "dashboard_card").map(([name, items]) => (
+          {Object.entries(lists).filter(([name]) => !["dashboard_card", "leave_type", "leave_status"].includes(name)).map(([name, items]) => (
             <div className="card" key={name} style={{ marginBottom: 16 }}>
               <div className="card__header"><span className="card__title">{LIST_TITLES[name] || name}</span></div>
               <div className="card__body" style={{ padding: 0 }}>
@@ -242,14 +242,6 @@ export default function ConfigPage() {
                   </tbody>
                 </table>
               </div>
-              {name === "leave_type" && (
-                <div className="card__footer" style={{ display: "flex", gap: 8 }}>
-                  <input className="form-control" placeholder="Code (e.g. HPL)" value={newCode} onChange={(e) => setNewCode(e.target.value.toUpperCase())} style={{ width: 140 }} />
-                  <input className="form-control" placeholder="Label" value={newName} onChange={(e) => setNewName(e.target.value)} style={{ width: 220 }} />
-                  <button className="btn btn-primary btn-sm" disabled={!newCode || !newName}
-                    onClick={() => run(async () => { await addListItem(token!, "leave_type", { code: newCode, label: newName, sort_order: items.length }); setNewCode(""); setNewName(""); }, "Leave type added")}>Add leave type</button>
-                </div>
-              )}
             </div>
           ))}
         </>

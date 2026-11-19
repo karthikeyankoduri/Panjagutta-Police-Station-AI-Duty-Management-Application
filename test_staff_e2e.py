@@ -6,7 +6,7 @@ BASE_URL = "http://localhost:8000/api"
 def run_test():
     # 1. Login as bootstrap admin to perform test
     print("1. Logging in as admin...")
-    login_res = requests.post(f"{BASE_URL}/auth/login", json={"username": "admin_si_panjagutta", "password": "Password@PJ2024!"})
+    login_res = requests.post(f"{BASE_URL}/auth/login", json={"username": "admin_si_panjagutta", "password": "PJ@2024"})
     if login_res.status_code != 200:
         login_res = requests.post(f"{BASE_URL}/auth/login", json={"username": "admin_si_demo", "password": "Demo@AdminSI#2024!"})
     if login_res.status_code != 200:
@@ -74,14 +74,14 @@ def run_test():
 
     # 7. Test login with newly imported SHO credentials
     print("7. Testing login with newly imported SHO credentials (sho_panjagutta)...")
-    sho_login = requests.post(f"{BASE_URL}/auth/login", json={"username": "sho_panjagutta", "password": "Password@PJ2024!"})
+    sho_login = requests.post(f"{BASE_URL}/auth/login", json={"username": "sho_panjagutta", "password": "PJ@2024"})
     assert sho_login.status_code == 200, f"SHO login failed: {sho_login.text}"
     sho_token = sho_login.json()["access_token"]
     print(f"SHO login successful! Token received. Role = {sho_login.json()['role']}")
 
     # 8. Test login with newly imported Admin SI credentials
     print("8. Testing login with newly imported Admin SI credentials (admin_si_panjagutta)...")
-    admin_si_login = requests.post(f"{BASE_URL}/auth/login", json={"username": "admin_si_panjagutta", "password": "Password@PJ2024!"})
+    admin_si_login = requests.post(f"{BASE_URL}/auth/login", json={"username": "admin_si_panjagutta", "password": "PJ@2024"})
     assert admin_si_login.status_code == 200, f"Admin SI login failed: {admin_si_login.text}"
     print(f"Admin SI login successful! Token received. Role = {admin_si_login.json()['role']}")
 

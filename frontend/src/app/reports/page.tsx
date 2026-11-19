@@ -17,9 +17,9 @@ import {
 
 type Tab = "shift-end" | "daily" | "vacancy" | "workload";
 const TABS: { key: Tab; label: string }[] = [
-  { key: "shift-end", label: "📋 Shift-end handover" },
-  { key: "daily", label: "🗓 Daily report" },
-  { key: "vacancy", label: "📊 Vacancy report" },
+  { key: "shift-end", label: "Shift-end handover" },
+  { key: "daily", label: "Daily report" },
+  { key: "vacancy", label: "Vacancy report" },
   { key: "workload", label: "⚖️ Workload report" },
 ];
 
@@ -92,7 +92,7 @@ export default function ReportsPage() {
           <div className="page-subtitle">Generated from records using the same rules as the dashboard. Export as PDF, Excel or CSV.</div>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <button className="btn btn-secondary btn-sm" onClick={() => window.print()}>🖨 Print</button>
+          <button className="btn btn-secondary btn-sm" onClick={() => window.print()}>Print</button>
           {(["pdf", "xlsx", "csv"] as const).map((f) => (
             <button key={f} className="btn btn-primary btn-sm" onClick={() => handleDownload(f)} disabled={!!downloading || loading}>
               {downloading === f ? "Preparing…" : `⬇ ${f === "xlsx" ? "Excel" : f.toUpperCase()}`}

@@ -249,7 +249,10 @@ async def compute_statuses(
     staff_ids: Sequence[int],
     for_date: date,
     shift_code: Optional[ShiftCode] = None,
+    attendance_shift: Optional[ShiftCode] = None,
 ) -> Dict[int, AvailabilityResult]:
+    """attendance_shift narrows only the attendance lookup (defaults to shift_code), so a view over
+    all shifts can still count attendance for just the shift that is running."""
     staff_ids = list(dict.fromkeys(staff_ids))
     if not staff_ids:
         return {}
@@ -346,8 +349,9 @@ async def compute_statuses(
 
     # 6/7. attendance
     att_q = select(Attendance).where(Attendance.staff_id.in_(staff_ids), Attendance.attendance_date == for_date)
-    if shift_code:
-        att_q = att_q.where(Attendance.shift_code == shift_code)
+    att_shift = attendance_shift or shift_code
+    if att_shift:
+        att_q = att_q.where(Attendance.shift_code == att_shift)
     rows = await db.execute(att_q)
     for a in rows.scalars().all():
         facts[a.staff_id].attendance_confirmed |= bool(a.is_confirmed)

@@ -93,7 +93,7 @@ Phase 0 (SHO sign-off on rotation, rest and approvals) has not happened. Every r
 | C2 | Sector SI can read other sectors' rosters, leave, movements, tasks, reports and alerts (only staff, attendance and dashboard are scoped). `require_sector_scope()` exists but is never used | §12, step 7 | `dependencies.py:87`; routes listed above |
 | C3 | `contact_phone` is returned to every authenticated user, including STAFF | §12 | `staff.py:108-169` |
 | C4 | `POST /staff/clear-demo-data` runs `DELETE FROM audit_log`; no DB-level append-only protection exists | §5.3 #4, §12 | `staff.py:376-438`, `seed.py:37` |
-| C5 | A hard-coded password list works for demo accounts (`admin123`, `staff123`, `Password@PJ2024!`); default password for all imported users | §12 | `auth.py:107-109`, `staff.py:191,284` |
+| C5 | A hard-coded password list works for demo accounts (`admin123`, `staff123`, `PJ@2024`); default password for all imported users | §12 | `auth.py:107-109`, `staff.py:191,284` |
 | C6 | The login rate-limit checks `/auth/login` but the real route is `/api/auth/login`, so it never fires | §12 | `main.py:112` |
 | C7 | docker-compose passes `SECRET_KEY` but the app reads `JWT_SECRET_KEY`; the deployed stack signs tokens with the default key | §12 | `docker-compose.yml`, `core/config.py` |
 | C8 | A fresh Docker stack has an empty database: no Alembic revisions exist and `create_all` runs only inside `seed.py` | step 3, 4 | `backend/migrations/versions/` is empty |

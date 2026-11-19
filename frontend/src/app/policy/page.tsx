@@ -156,7 +156,7 @@ export default function PolicyPage() {
           <div style={{ fontWeight: 600, fontSize: "14px" }}>
             {policy.policy_status === "confirmed" && "✓ Policy Confirmed by SHO — Roster Publication Unlocked"}
             {policy.policy_status === "demo_simulated" && "⚠ Demo Simulation Mode Active — For Prototype Evaluation Only"}
-            {policy.policy_status === "unconfirmed" && "🔒 Policy Unconfirmed — Roster Publication Gate is Blocked"}
+            {policy.policy_status === "unconfirmed" && "Policy Unconfirmed — Roster Publication Gate is Blocked"}
           </div>
           <div style={{ fontSize: "12px", marginTop: "4px" }}>
             {policy.policy_status === "confirmed"

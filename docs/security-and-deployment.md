@@ -45,7 +45,7 @@ Every permission is checked on the server (`backend/app/auth/dependencies.py`: `
 ## 2. Authentication and sessions
 
 - **Passwords** are hashed with salted bcrypt (`backend/app/auth/jwt.py`, `bcrypt` library). Plaintext passwords are never stored or written to the audit log (`app/services/audit.py` strips keys containing password, token, secret, hashed or otp).
-- **Password rules:** at least 10 characters, letters and numbers, must not contain the username, must differ from the current and the shared default password.
+- **Password rules:** any length, letters and numbers, must not contain the username, must differ from the current and the shared default password.
 - **First-time and reset passwords:** accounts created or reset by an administrator, and any account signing in with the shared provisioning password, are flagged *must change password*. Until it is changed the API refuses every request except password change, profile and logout (HTTP 403 with `X-Password-Change-Required`). The web app and the Android app open the change-password screen automatically.
 - **Lockout:** 5 consecutive failed attempts lock the account for 15 minutes (`AUTH_MAX_FAILED_ATTEMPTS`, `AUTH_LOCKOUT_MINUTES`).
 - **Rate limit:** 20 sign-in attempts per IP address per 5 minutes on `/api/auth/login` (in-memory; use a shared store if several API workers run).
@@ -134,3 +134,10 @@ GRANT USAGE, SELECT ON SEQUENCE audit_log_id_seq TO panjagutta_app;
 - Contact details are returned only to the SHO, Admin SI, the person's own Sector SI and the person themselves.
 - Staff data files containing personal details must not be placed in the web app's public folder. The proforma template is now served only through the API (`/api/staff/download-template`), but that endpoint does **not** yet require sign-in and returns `backend/data/panjagutta_140_police_staff.csv`, which contains personal details and a password column. Replace that file with a blank template, or require sign-in on the endpoint, before go-live.
 - The staff CSV removed from `frontend/public/` remains in earlier Git commits; purge it from history (for example with `git filter-repo --path frontend/public/panjagutta_140_police_staff.csv --invert-paths`) before the repository is shared further.
+
+## Live GPS tracking
+
+- The Android app reports the signed-in officer's position once a minute through a foreground service (a persistent "location sharing is on" notification is shown). Sharing starts after sign-in once location permission is granted and stops on sign-out.
+- `POST /api/mobile/location` stores only the **latest** fix per officer (`staff_locations`); no location history is kept.
+- Place names come from OpenStreetMap Nominatim (free, no key). A new lookup is made only when the officer moved more than `LOCATION_MIN_MOVE_METERS` (default 50 m); lookups are rate-limited to 1/second and cached. The backend needs outbound internet access to `NOMINATIM_URL`.
+- Positions are visible only to Admin SI and Super Admin (Staff table "Location" column and the "Live Locations" page). Because each report counts as activity, the server-side inactivity timeout does not expire a session while the app is tracking.

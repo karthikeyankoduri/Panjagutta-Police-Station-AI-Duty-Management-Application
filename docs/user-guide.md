@@ -107,7 +107,7 @@ If you want to test from absolute zero without pre-made officers:
    - **Password:** `Demo@AdminSI#2024!`
 4. Go to **Staff Register** (`/staff`) &rarr; click **CSV Import**.
 5. Upload your station personnel roster CSV (matching columns: `service_number,name,designation,category,sector_id,contact_phone`).
-6. All personnel are instantly registered, linked to login accounts, and assigned the provisioning password (`Password@PJ2024!`). Each officer must choose a new password at first sign-in (web or Android).
+6. All personnel are instantly registered, linked to login accounts, and assigned the provisioning password (`PJ@2024`). Each officer must choose a new password at first sign-in (web or Android).
 
 ---
 
@@ -117,12 +117,12 @@ The system enforces strict **Role-Based Access Control (RBAC)** according to Sec
 
 | Role Code | Operational Title | Primary Persona | Default Login ID | Default Password | Granted Privileges & Scopes |
 |:---|:---|:---|:---|:---|:---|
-| **SUPER_ADMIN** | System Administrator | IT In-Charge | `pg_004` *(or `admin`)* | `Password@PJ2024!`  | Full administrative power; staff CRUD; system role reassignments; audit log inspection. |
-| **SHO** | Station House Officer | Inspector R. Sharma | `pg_001` *(or `sho_demo`)* | `Password@PJ2024!` *(or `Demo@SHO#2024!`)* | Station Head; formal Roster Approval (`submitted` &rarr; `approved`); Policy Gate Confirmation; Roster Publication; Supervisory Reports. |
+| **SUPER_ADMIN** | System Administrator | IT In-Charge | `pg_004` *(or `admin`)* | `PJ@2024`  | Full administrative power; staff CRUD; system role reassignments; audit log inspection. |
+| **SHO** | Station House Officer | Inspector R. Sharma | `pg_001` *(or `sho_demo`)* | `PJ@2024` *(or `Demo@SHO#2024!`)* | Station Head; formal Roster Approval (`submitted` &rarr; `approved`); Policy Gate Confirmation; Roster Publication; Supervisory Reports. |
 | **ADMIN_SI** | Admin Sub-Inspector | SI Venkatesh Reddy | `admin_si_demo` | `Demo@AdminSI#2024!` | Core operator; drafts rosters; duty point allocations; exception justification overrides; daily attendance; shift timing configuration. |
 | **SECTOR_SI** | Sector Sub-Inspector | SI Priya Devi (Sector 1) | `sector1_si_demo` | `Demo@Sec1SI#2024!` | Scoped to designated sector; view sector beat deployments; inspect Sector Blue Colts/Patrols; assign sector tasks; self-service movements. |
-| **DI / DSI** | Detective Inspector (Crime) | Inspector Crime | `pg_002` *(or `di_demo`)* | `Password@PJ2024!` *(or `Demo@DI#2024!`)* | Crime wing oversight; movement authorizations for crime scene/investigation; read-only roster views; task assignments. |
-| **STAFF** | Beat Constable / WPC | PC Rajesh Babu | `pg_005` *(or `staff_demo`)* | `Password@PJ2024!` *(or `Demo@Staff#2024!`)* | Self-service only; personal roster view; outside movement requests (`pending_authorization`); leave requests. Administrative tools hidden. |
+| **DI / DSI** | Detective Inspector (Crime) | Inspector Crime | `pg_002` *(or `di_demo`)* | `PJ@2024` *(or `Demo@DI#2024!`)* | Crime wing oversight; movement authorizations for crime scene/investigation; read-only roster views; task assignments. |
+| **STAFF** | Beat Constable / WPC | PC Rajesh Babu | `pg_005` *(or `staff_demo`)* | `PJ@2024` *(or `Demo@Staff#2024!`)* | Self-service only; personal roster view; outside movement requests (`pending_authorization`); leave requests. Administrative tools hidden. |
 
 ---
 
@@ -159,7 +159,7 @@ Verify that personnel profiles can be registered, edited, and given appropriate 
 1. Open browser: `http://localhost:3000/login` (or LAN IP).
 2. Enter Credentials:
    - **Username:** `admin_si_demo` *(or `pg_004`)*
-   - **Password:** `Demo@AdminSI#2024!` *(or `Password@PJ2024!`)*
+   - **Password:** `Demo@AdminSI#2024!` *(or `PJ@2024`)*
 3. Click **"Sign In"**. You are redirected to `/dashboard`.
 4. From the left navigation sidebar, click **"Staff Register"** (`/staff`).
 5. **Add a Single Staff Member:**
@@ -190,7 +190,7 @@ Verify that the statutory Section 1 Policy Gate works and that shift timings can
 1. Log out or open a private/incognito browser window.
 2. Sign in as Station House Officer:
    - **Username:** `pg_001` *(or `sho_demo`)*
-   - **Password:** `Password@PJ2024!` *(or `Demo@SHO#2024!`)*
+   - **Password:** `PJ@2024` *(or `Demo@SHO#2024!`)*
 3. Notice the top navigation bar displays the persona badge: `Station House Officer (SHO)`.
 4. Click **"Policy Config"** (`/policy`) in the sidebar.
 5. **Inspect Current Policy Gate Banner:**
@@ -258,6 +258,13 @@ Verify daily attendance headcount, dynamic Duty Master retrieval, and live duty 
    - Click the top button: **"💾 Save Allocation Draft"**.
    - **Verification:** Green notification displays: *"Allocations saved successfully for Roster #ID (v2)"*. Any rest-hour warnings appear in the rule validation banner.
 
+#### Weekly allocation (assign each officer for a whole week)
+On **Roster & Duty → Allocation**, switch from **Day (by duty point)** to **Week (by officer)**.
+- Rows are officers and columns are Monday–Sunday. In each day cell pick a **shift** and a **duty point**; choose *Off / none* to clear it. **Fill week** copies an officer's first assigned day across the week; **Clear** empties the row.
+- Rules (leave, rest hours, shift overlap, rank) are checked while you edit. A blocked cell shows ⛔; use **Authorize** to record an exception with a reason and an authorizing officer, exactly as in the day view.
+- **Save week** creates or updates one draft roster per day and shift in a single step. If any day is blocked, nothing is saved. Rosters that are already approved or published are left unchanged and listed after saving; use **Revise** on the Rosters tab to change them.
+- Submit, approve and publish still work per day and shift. The Sector SI can view the week but not edit it. The Android app has the same Day | Week toggle, with each officer's week shown as a card of seven day rows.
+
 ---
 
 ### Phase 4: SHO & Admin SI — Human-in-the-Loop Approval & Publication
@@ -270,7 +277,7 @@ Verify the human-in-the-loop approval gate: Draft submission, Allocation Inspect
    - Click the **"📤 Submit for Approval"** button.
    - **Verification:** Roster status changes from `draft` to `submitted`.
 2. **Switch to Station House Officer (SHO):**
-   - Sign in as `pg_001` (Password: `Password@PJ2024!`).
+   - Sign in as `pg_001` (Password: `PJ@2024`).
    - Navigate to **"Duty Rosters"** (`/roster`).
 3. **Inspect Allocations Drawer:**
    - In the table row for the submitted roster, click **"📋 Allocations"**.
@@ -300,7 +307,7 @@ Verify that general constables have a focused, self-service experience with admi
 #### Steps:
 1. Log out and sign in as a Constable:
    - **Username:** `pg_005` *(or `staff_demo`)*
-   - **Password:** `Password@PJ2024!` *(or `Demo@Staff#2024!`)*
+   - **Password:** `PJ@2024` *(or `Demo@Staff#2024!`)*
 2. **Verify Role Isolation in Navigation:**
    - Notice the sidebar: **Administrative items are hidden** (Staff Register, Policy Config, and System Audit do NOT appear).
 3. **Review Personal Deployment:**
@@ -362,7 +369,7 @@ Verify that Crime Wing inspectors can dispatch investigation tasks, authorize cr
 #### Steps:
 1. Sign in as **Detective Inspector (DI)**:
    - **Username:** `pg_002` *(or `di_demo`)*
-   - **Password:** `Password@PJ2024!` *(or `Demo@DI#2024!`)*
+   - **Password:** `PJ@2024` *(or `Demo@DI#2024!`)*
 2. **Authorize Crime Investigation Movement:**
    - Click **"Outside Movements"** (`/movements`).
    - Click **"+ Log Out Movement"**.
@@ -504,7 +511,7 @@ To guarantee compliance with police security protocols, perform these negative t
 ## 9. Android app guide (staff)
 
 1. **Install** the APK provided by the Admin SI. The app connects to the station server over HTTPS.
-2. **Sign in** with your station ID and temporary password, then set your own password (at least 10 characters, letters and numbers).
+2. **Sign in** with your station ID and temporary password, then set your own password (any length, letters and numbers).
 3. **Home** shows today's duty with a *Submit attendance* button, upcoming shifts, your open tasks (*Start* / *Mark completed*) and your latest leave request.
 4. **Calendar** shows your duty diary by month; tap a date for the shift, duty, task and attendance record.
 5. **Roster** lists your published shifts.

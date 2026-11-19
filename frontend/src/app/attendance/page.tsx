@@ -373,7 +373,7 @@ export default function AttendancePage() {
             onClick={() => setActiveTab("station")}
             id="tab-station-console"
           >
-            🏢 Station Roll-Call Console
+            Station Roll-Call Console
           </button>
           <button
             type="button"
@@ -381,7 +381,7 @@ export default function AttendancePage() {
             onClick={() => setActiveTab("personal")}
             id="tab-my-attendance"
           >
-            👤 My Personal Attendance &amp; Calendar
+            My Personal Attendance &amp; Calendar
           </button>
           <button
             type="button"
@@ -389,7 +389,7 @@ export default function AttendancePage() {
             onClick={() => { setActiveTab("verify"); loadVerify(stationDate || todayLocal, stationShift); }}
             id="tab-verify"
           >
-            🧾 Scheduled vs Signed in
+            Scheduled vs Signed in
           </button>
         </div>
       )}
@@ -563,7 +563,6 @@ export default function AttendancePage() {
                 <div style={{ padding: "30px", textAlign: "center", color: "#94a3b8" }}>Loading roll-call...</div>
               ) : filteredStationRecords.length === 0 ? (
                 <div className="empty-state">
-                  <div className="empty-state__icon">👥</div>
                   <div className="empty-state__title">No Personnel Records</div>
                   <div className="empty-state__text">
                     {searchQuery ? "No staff match your search query." : "No active staff found in system."}
@@ -702,14 +701,14 @@ export default function AttendancePage() {
                 className={`btn btn-sm ${personalViewMode === "calendar" ? "btn-primary" : "btn-secondary"}`}
                 onClick={() => setPersonalViewMode("calendar")}
               >
-                📅 Calendar View
+                Calendar View
               </button>
               <button
                 type="button"
                 className={`btn btn-sm ${personalViewMode === "history" ? "btn-primary" : "btn-secondary"}`}
                 onClick={() => setPersonalViewMode("history")}
               >
-                📋 History Ledger
+                History Ledger
               </button>
             </div>
           </div>
@@ -719,7 +718,7 @@ export default function AttendancePage() {
             <div className="card__body" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "16px" }}>
               <div style={{ display: "flex", alignItems: "center", gap: "14px" }}>
                 <div style={{ fontSize: "32px", background: "#243447", width: "54px", height: "54px", borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                  👮
+                  
                 </div>
                 <div>
                   <div style={{ fontSize: "16px", fontWeight: 700, color: "#fff" }}>
@@ -950,7 +949,6 @@ export default function AttendancePage() {
                   <div style={{ padding: "30px", textAlign: "center", color: "#94a3b8" }}>Loading records...</div>
                 ) : personalRecords.length === 0 ? (
                   <div className="empty-state">
-                    <div className="empty-state__icon">📅</div>
                     <div className="empty-state__title">No Attendance Records</div>
                     <div className="empty-state__text">
                       No duty records recorded for {MONTH_NAMES[calMonth]} {calYear}.

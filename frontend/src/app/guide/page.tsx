@@ -34,18 +34,6 @@ const FLOWS: { id: string; title: string; summary: string; steps: Step[] }[] = [
     ],
   },
   {
-    id: "leave",
-    title: "3. Leave and rest",
-    summary: "Only approved leave removes a person from the roster.",
-    steps: [
-      { who: "Staff", what: "Request leave with type and dates (web or Android). A reference number is generated.", where: { href: "/leave", label: "Leave" } },
-      { who: "System", what: "The request is routed to the SHO and Admin SI. Overlapping requests are refused." },
-      { who: "SHO / Admin SI", what: "Review the roster impact preview, then approve or reject with remarks. The officer is notified." },
-      { who: "System", what: "Approved leave that clashes with a roster raises a vacancy alert for the Admin SI." },
-      { who: "Staff / approver", what: "Pending (or future approved) leave can be cancelled; the decision is recorded." },
-    ],
-  },
-  {
     id: "movement",
     title: "4. Outside movement",
     summary: "Official work outside the station, from request to return.",

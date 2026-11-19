@@ -22,29 +22,40 @@ final class ApprovalsScreen extends ModuleScreen {
 
     @Override
     void show() {
-        load(() -> a.request("/dashboard/inbox", "GET", null, false), data -> {
-            inbox = data;
+        load(() -> {
+            JSONObject in = a.request("/dashboard/inbox", "GET", null, false);
+            JSONArray changes = new JSONArray();
+            if (RoleAccess.inboxShowsDutyChanges(role)) {
+                changes = a.requestArray("/rosters/change-requests/?status=pending");
+            }
+            return new Object[]{in, changes};
+        }, data -> {
+            inbox = (JSONObject) data[0];
+            dutyChanges = (JSONArray) data[1];
             render();
         });
     }
 
+    private JSONArray dutyChanges = new JSONArray();
+
     private void render() {
         a.content.removeAllViews();
         heading("APPROVALS", "Approvals & Alerts",
-                "Everything waiting on you: roster approvals, leave decisions, movement authorizations and alerts.");
+                "Everything waiting on you: roster approvals, movement authorizations and alerts.");
         if (RoleAccess.canAskAI(role)) addCopilot();
         JSONObject counts = inbox.optJSONObject("counts");
         if (counts == null) counts = new JSONObject();
         LinearLayout stats = card(0);
         stats.addView(text("WAITING FOR YOU", 10, BLUE, true));
-        stats.addView(text(counts.optInt("total") + " item(s) in total", 16, counts.optInt("total") > 0 ? AMBER : GREEN, true));
-        stats.addView(muted("Rosters " + counts.optInt("rosters") + " · Leave " + counts.optInt("leave")
+        stats.addView(text(Math.max(0, counts.optInt("total") - counts.optInt("leave")) + " item(s) in total", 16, Math.max(0, counts.optInt("total") - counts.optInt("leave")) > 0 ? AMBER : GREEN, true));
+        stats.addView(muted("Rosters " + counts.optInt("rosters")
+                + (RoleAccess.inboxShowsDutyChanges(role) ? " · Duty changes " + dutyChanges.length() : "")
                 + " · Movements " + counts.optInt("movements")
                 + " · Alerts " + counts.optInt("alerts")));
         add(stats);
 
         if (RoleAccess.inboxShowsRosters(role)) addRosters();
-        if (RoleAccess.inboxShowsLeave(role)) addLeave();
+        if (RoleAccess.inboxShowsDutyChanges(role)) addDutyChanges();
         if (RoleAccess.inboxShowsMovements(role)) {
             addMovements();
         }
@@ -54,7 +65,7 @@ final class ApprovalsScreen extends ModuleScreen {
     private void addCopilot() {
         LinearLayout card = card(BLUE);
         card.addView(text("AI STATION COPILOT", 10, BLUE, true));
-        card.addView(muted("On-premises and explainable. Ask in plain language, e.g. 'Who is on leave today?'"));
+        card.addView(muted("On-premises and explainable. Ask in plain language, e.g. 'What is the station strength?'"));
         EditText question = textField("Ask the station copilot…");
         question.setText(aiQuestion);
         card.addView(question, a.fieldParams());
@@ -73,7 +84,7 @@ final class ApprovalsScreen extends ModuleScreen {
                     a.mainHandler.post(() -> {
                         aiAnswer = str(res, "response", "No answer.");
                         aiDisclaimer = str(res, "disclaimer");
-                        if (a.current == this) {
+                        if (active()) {
                             answerBox.removeAllViews();
                             fillAnswer(answerBox);
                         }
@@ -81,7 +92,7 @@ final class ApprovalsScreen extends ModuleScreen {
                 } catch (Exception e) {
                     final String message = e.getMessage() == null ? "The copilot could not answer." : e.getMessage();
                     a.mainHandler.post(() -> {
-                        if (a.current == this) {
+                        if (active()) {
                             answerBox.removeAllViews();
                             answerBox.addView(text(message, 12, RED, false));
                         }
@@ -120,25 +131,29 @@ final class ApprovalsScreen extends ModuleScreen {
         }
     }
 
-    private void addLeave() {
-        JSONArray leave = arr(inbox, "leave");
-        section("LEAVE REQUESTS (" + leave.length() + ")");
-        if (leave.length() == 0) empty("No pending leave requests.");
-        for (int i = 0; i < leave.length(); i++) {
-            JSONObject l = leave.optJSONObject(i);
-            if (l == null) continue;
-            final int id = l.optInt("id");
-            final String ref = str(l, "reference_number", "#" + id);
+    private void addDutyChanges() {
+        section("DUTY CHANGE REQUESTS (" + dutyChanges.length() + ")");
+        if (dutyChanges.length() == 0) empty("No pending duty change requests.");
+        for (int i = 0; i < dutyChanges.length(); i++) {
+            JSONObject r = dutyChanges.optJSONObject(i);
+            if (r == null) continue;
+            final int id = r.optInt("id");
             LinearLayout card = card(AMBER);
-            card.addView(titleRow(text(person(str(l, "staff_name", "Staff #" + str(l, "staff_id")), str(l, "service_number")), 14, INK, true),
-                    badge(str(l, "leave_type").toUpperCase(Locale.ROOT), BLUE, TINT)));
-            card.addView(muted(ref + " · " + day(str(l, "start_date")) + " to " + day(str(l, "end_date"))));
+            card.addView(titleRow(text(person(str(r, "officer_name", "Officer"), str(r, "service_number")), 14, INK, true),
+                    badge("#" + id, BLUE, TINT)));
+            card.addView(muted("Now: " + day(str(r, "current_roster_date")) + " · Shift " + str(r, "current_shift_code")
+                    + " · " + str(r, "current_duty_category", "General / Unassigned")));
+            card.addView(muted("Wants: Shift " + str(r, "requested_shift_code", str(r, "current_shift_code"))
+                    + " · " + str(r, "requested_duty_category", "any suitable duty point")));
+            card.addView(muted("Reason: " + str(r, "reason")));
             card.addView(buttonRow(
-                    success("Quick approve", () -> prompt("Approve leave " + ref, "Approval remarks (optional). Check roster impact in Leave first.", false,
-                            c -> act("/leave/" + id + "/approve", "POST", body("remarks", c.isEmpty() ? null : c), "Leave " + ref + " approved."))),
-                    danger("Reject", () -> prompt("Reject leave " + ref, "Reason for rejection (required, shown to the officer)", true,
-                            c -> act("/leave/" + id + "/reject", "POST", body("remarks", c), "Leave " + ref + " rejected."))),
-                    secondary("Review", () -> a.openModule(RoleAccess.LEAVE))));
+                    success("Approve", () -> prompt("Approve request #" + id, "Approval remarks / reassignment notes (optional)", false,
+                            c -> act("/rosters/change-requests/" + id + "/approve", "POST", body("remarks", c.isEmpty() ? null : c),
+                                    "Duty change request #" + id + " approved."))),
+                    danger("Reject", () -> prompt("Reject request #" + id, "Reason for rejecting (required)", true,
+                            c -> act("/rosters/change-requests/" + id + "/reject", "POST", body("remarks", c),
+                                    "Duty change request #" + id + " rejected."))),
+                    secondary("Open", () -> a.openModule(RoleAccess.ROSTER_REQUESTS))));
             addTight(card);
         }
     }

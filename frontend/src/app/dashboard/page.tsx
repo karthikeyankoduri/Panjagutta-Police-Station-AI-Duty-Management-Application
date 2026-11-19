@@ -3,6 +3,7 @@ import { useEffect, useState, useCallback, useMemo } from "react";
 import Link from "next/link";
 import { useAuth } from "@/lib/auth-context";
 import AppShell from "@/components/AppShell";
+import LiveLocationsSection, { LIVE_LOCATIONS_ID, LIVE_LOCATIONS_ROLES } from "@/components/LiveLocationsSection";
 import {
   getDashboardSummary, getDashboardViews, getAlerts, getPolicyStatus, getSectors, getSections, getConfigLists,
   resolveAlert, shiftLabels, hiddenDashboardCards,
@@ -10,20 +11,20 @@ import {
 } from "@/lib/api";
 
 const CARD_CONFIG: { key: CardKey; label: string; cls: string; icon: string; hint?: string }[] = [
-  { key: "total_staff", label: "Total Staff", cls: "card--total", icon: "👥" },
-  { key: "scheduled_current_shift", label: "Scheduled", cls: "card--on-duty", icon: "📅", hint: "On the published roster" },
-  { key: "present", label: "Present", cls: "card--present", icon: "✅", hint: "Confirmed attendance" },
-  { key: "on_duty", label: "On Duty", cls: "card--on-duty", icon: "🔵" },
-  { key: "available", label: "Available", cls: "card--available", icon: "🟢", hint: "Present, no duty" },
-  { key: "field_duty", label: "Field Duty", cls: "card--field", icon: "🏃" },
-  { key: "court_duty", label: "Court Duty", cls: "card--court", icon: "⚖️" },
-  { key: "patrol_beat", label: "Patrol / Beat", cls: "card--patrol", icon: "🚔" },
-  { key: "on_leave", label: "On Leave", cls: "card--leave", icon: "🏖️" },
-  { key: "duty_off_rest", label: "Duty Off / Rest", cls: "card--rest", icon: "😴" },
-  { key: "attached_other_wing", label: "Attached", cls: "card--attached", icon: "🔗" },
-  { key: "official_movement", label: "Official Movement", cls: "card--movement", icon: "🚗" },
-  { key: "absent", label: "Absent", cls: "card--absent", icon: "❌" },
-  { key: "vacant_positions", label: "Vacant Positions", cls: "card--vacant", icon: "⚠️", hint: "Opens the vacancy view" },
+  { key: "total_staff", label: "Total Staff", cls: "card--total", icon: "" },
+  { key: "scheduled_current_shift", label: "Scheduled", cls: "card--on-duty", icon: "", hint: "On the published roster" },
+  { key: "present", label: "Present", cls: "card--present", icon: "", hint: "Confirmed attendance" },
+  { key: "on_duty", label: "On Duty", cls: "card--on-duty", icon: "" },
+  { key: "available", label: "Available", cls: "card--available", icon: "", hint: "Present, no duty" },
+  { key: "field_duty", label: "Field Duty", cls: "card--field", icon: "" },
+  { key: "court_duty", label: "Court Duty", cls: "card--court", icon: "" },
+  { key: "patrol_beat", label: "Patrol / Beat", cls: "card--patrol", icon: "" },
+  { key: "on_leave", label: "On Leave", cls: "card--leave", icon: "" },
+  { key: "duty_off_rest", label: "Duty Off / Rest", cls: "card--rest", icon: "" },
+  { key: "attached_other_wing", label: "Attached", cls: "card--attached", icon: "" },
+  { key: "official_movement", label: "Official Movement", cls: "card--movement", icon: "" },
+  { key: "absent", label: "Absent", cls: "card--absent", icon: "" },
+  { key: "vacant_positions", label: "Vacant Positions", cls: "card--vacant", icon: "", hint: "Opens the vacancy view" },
 ];
 
 const STATUS_BADGE_MAP: Record<string, string> = {
@@ -45,6 +46,7 @@ type ViewTab = "current" | "upcoming" | "rest" | "vacancy";
 
 export default function DashboardPage() {
   const { token, user } = useAuth();
+  const [showLive, setShowLive] = useState(false);
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [views, setViews] = useState<DashboardViews | null>(null);
   const [alerts, setAlerts] = useState<Alert[]>([]);
@@ -139,13 +141,25 @@ export default function DashboardPage() {
     }
   };
 
+  const canSeeLive = Boolean(user && LIVE_LOCATIONS_ROLES.includes(user.role));
+  // The Live Locations button reveals the map section and scrolls down to it (nothing is added to the address).
+  const openLive = () => {
+    setShowLive(true);
+    setTimeout(() => document.getElementById(LIVE_LOCATIONS_ID)?.scrollIntoView({ behavior: "smooth", block: "start" }), 150);
+  };
+
   const canResolve = user && ["SHO", "ADMIN_SI", "SECTOR_SI", "SUPER_ADMIN"].includes(user.role);
 
   return (
     <AppShell>
+      {canSeeLive && (
+        <div style={{ marginBottom: 12 }}>
+          <button className="btn btn-primary" onClick={openLive} aria-controls={LIVE_LOCATIONS_ID}>Live Locations</button>
+        </div>
+      )}
       {(!policy || policy.policy_status === "unconfirmed") && (
         <div className="policy-banner" style={{ background: "#fef2f2", borderColor: "#f87171", color: "#991b1b" }}>
-          <span className="policy-banner__icon">🔒</span>
+          <span className="policy-banner__icon"></span>
           <div>
             <div className="policy-banner__title" style={{ color: "#991b1b" }}>Rotation &amp; Rest Policy: UNCONFIRMED</div>
             <div className="policy-banner__text">
@@ -179,12 +193,12 @@ export default function DashboardPage() {
       {summary && summary.cards.total_staff === 0 && !Object.values(filters).some(Boolean) && (
         <div style={{ background: "linear-gradient(135deg, #1e3a8a, #1e40af)", color: "#ffffff", padding: "16px 20px", borderRadius: "var(--radius-md)", marginBottom: 20, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flexWrap: "wrap", boxShadow: "var(--shadow-md)" }}>
           <div>
-            <div style={{ fontWeight: 800, fontSize: 16 }}>📂 Station Staff Register is Empty</div>
+            <div style={{ fontWeight: 800, fontSize: 16 }}>Station Staff Register is Empty</div>
             <div style={{ fontSize: 13, color: "#bfdbfe", marginTop: 4 }}>Import the station staff register and provision logins via CSV import.</div>
           </div>
           {user && ["SHO", "ADMIN_SI", "SUPER_ADMIN"].includes(user.role) && (
             <Link href="/config?tab=staff" className="btn btn-secondary btn-lg" style={{ background: "#ffffff", color: "#1e3a8a", fontWeight: 700, border: "none" }} id="btn-go-to-csv-import">
-              👥 Go to Staff &amp; CSV Import →
+              Go to Staff &amp; CSV Import →
             </Link>
           )}
         </div>
@@ -274,12 +288,12 @@ export default function DashboardPage() {
             {((summary?.cards.emergency_deployment ?? 0) > 0 || (summary?.cards.shift_change_pending ?? 0) > 0) && (
               <>
                 <button className={`summary-card card--absent${selectedCard === "emergency_deployment" ? " selected" : ""}`} onClick={() => onCard("emergency_deployment")} style={{ textAlign: "left" }}>
-                  <div style={{ fontSize: 20, marginBottom: 6 }}>🚨</div>
+                  <div style={{ fontSize: 20, marginBottom: 6 }}></div>
                   <div className="summary-card__value">{summary?.cards.emergency_deployment ?? 0}</div>
                   <div className="summary-card__label">Emergency Deployment</div>
                 </button>
                 <button className={`summary-card card--leave${selectedCard === "shift_change_pending" ? " selected" : ""}`} onClick={() => onCard("shift_change_pending")} style={{ textAlign: "left" }}>
-                  <div style={{ fontSize: 20, marginBottom: 6 }}>🔄</div>
+                  <div style={{ fontSize: 20, marginBottom: 6 }}></div>
                   <div className="summary-card__value">{summary?.cards.shift_change_pending ?? 0}</div>
                   <div className="summary-card__label">Shift Change Pending</div>
                 </button>
@@ -392,13 +406,13 @@ export default function DashboardPage() {
           {alerts.length > 0 && (
             <div className="card" style={{ marginBottom: 20 }}>
               <div className="card__header">
-                <h2 className="card__title">🔔 Active Alerts ({alerts.length})</h2>
+                <h2 className="card__title">Active Alerts ({alerts.length})</h2>
                 <Link href="/approvals" className="btn btn-secondary btn-sm">Open approvals &amp; alerts</Link>
               </div>
               <div className="card__body" style={{ padding: "12px 16px" }}>
                 {alerts.slice(0, 5).map((alert) => (
                   <div key={alert.id} className={`alert-item ${alert.severity}`} style={{ alignItems: "flex-start" }}>
-                    <span>{alert.severity === "critical" ? "🚨" : "⚠"}</span>
+                    <span>{alert.severity === "critical" ? "" : "⚠"}</span>
                     <div style={{ flex: 1 }}>
                       <strong>{alert.alert_type.replace(/_/g, " ")}</strong>
                       <br />{alert.message}
@@ -411,6 +425,9 @@ export default function DashboardPage() {
               </div>
             </div>
           )}
+
+          {/* Live Locations sits directly above Staff Status */}
+          <LiveLocationsSection visible={showLive} onHide={() => { setShowLive(false); window.scrollTo({ top: 0, behavior: "smooth" }); }} />
 
           <div className="card">
             <div className="card__header">
@@ -428,7 +445,7 @@ export default function DashboardPage() {
 
             {filteredStaff.length === 0 ? (
               <div className="empty-state">
-                <div className="empty-state__icon">👤</div>
+                <div className="empty-state__icon"></div>
                 <div className="empty-state__title">No staff in this view</div>
                 <div className="empty-state__text">{searchQuery ? "Try a different search term." : "Change the card or filters above."}</div>
               </div>

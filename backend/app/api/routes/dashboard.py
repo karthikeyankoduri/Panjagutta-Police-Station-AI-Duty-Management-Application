@@ -96,7 +96,7 @@ async def dashboard_summary(
     focus_shift = shift_code or (running_shift if target_date == running_date else None)
 
     staff = await _scoped_staff(db, current_user, designation, sector_id, section, category)
-    statuses = await compute_statuses(db, [s.id for s in staff], target_date, shift_code)
+    statuses = await compute_statuses(db, [s.id for s in staff], target_date, shift_code, attendance_shift=focus_shift)
 
     rows = []
     for s in staff:

@@ -264,7 +264,7 @@ export default function MovementsPage() {
       <div className="card" style={{ marginBottom: "24px", borderColor: pendingMovements.length > 0 ? "#f59e0b" : undefined }}>
         <div className="card__header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <span className="card__title" style={{ color: pendingMovements.length > 0 ? "#f59e0b" : undefined }}>
-            ⏳ Pending Departure Authorization Requests ({pendingMovements.length})
+            Pending Departure Authorization Requests ({pendingMovements.length})
           </span>
           {pendingMovements.length > 0 && (
             <span className="badge badge-warning">Action Required</span>

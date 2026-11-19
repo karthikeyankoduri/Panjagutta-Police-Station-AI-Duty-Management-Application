@@ -23,9 +23,12 @@ from app.models.models import (
     RosterStatus,
     ShiftConfig,
     Staff,
+    StaffLocation,
     User,
     UserRoleEnum,
 )
+from app.core.config import settings
+from app.services import geocoding
 from app.services.audit import AuditAction, log_event
 from app.services.shifts import now_local
 
@@ -47,6 +50,12 @@ class MobileMovementIn(BaseModel):
 
 class MobileTaskStatusIn(BaseModel):
     status: str
+
+
+class MobileLocationIn(BaseModel):
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+    timestamp: Optional[datetime] = None
 
 
 async def _linked_staff(db: AsyncSession, user: User) -> Staff:
@@ -147,6 +156,22 @@ async def mobile_me(
         "sector_id": person.sector_id,
         "section": person.section,
         "must_change_password": user.must_change_password,
+    }
+
+
+@router.get("/duty-options")
+async def duty_options(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Choices for the duty / shift change request form (any signed-in user): shift codes with timings and duty points."""
+    times = await _shift_times(db)
+    categories = (await db.execute(
+        select(DutyMaster.category).where(DutyMaster.is_active == True).distinct().order_by(DutyMaster.category)
+    )).scalars().all()
+    return {
+        "shifts": [{"code": c, "start_time": t[0], "end_time": t[1]} for c, t in sorted(times.items())],
+        "duty_categories": [c for c in categories if c],
     }
 
 
@@ -370,3 +395,48 @@ async def mobile_task_status(
     except ValueError:
         raise HTTPException(status_code=422, detail="Unknown task status")
     return await update_task_status(task_id, TaskStatusUpdate(new_status=new_status), user, db)
+
+
+@router.post("/location")
+async def report_location(
+    payload: MobileLocationIn,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Store the caller's latest GPS fix; reverse-geocode only when they moved significantly."""
+    person = await _linked_staff(db, current_user)
+    now = datetime.now(timezone.utc)
+    recorded = payload.timestamp or now
+    if recorded.tzinfo is None:
+        recorded = recorded.replace(tzinfo=timezone.utc)
+    # Device clocks drift; never trust a fix from the future.
+    if recorded > now:
+        recorded = now
+
+    row = (await db.execute(
+        select(StaffLocation).where(StaffLocation.staff_id == person.id)
+    )).scalar_one_or_none()
+    if row is None:
+        row = StaffLocation(staff_id=person.id, latitude=payload.latitude, longitude=payload.longitude, recorded_at=recorded)
+        db.add(row)
+    else:
+        row.latitude = payload.latitude
+        row.longitude = payload.longitude
+        row.recorded_at = recorded
+
+    needs_lookup = (
+        not row.location_name
+        or row.geocoded_lat is None
+        or row.geocoded_lng is None
+        or geocoding.haversine_m(row.geocoded_lat, row.geocoded_lng, payload.latitude, payload.longitude)
+        > settings.LOCATION_MIN_MOVE_METERS
+    )
+    if needs_lookup:
+        name = await geocoding.reverse_geocode(payload.latitude, payload.longitude)
+        if name:
+            row.location_name = name
+            row.geocoded_lat = payload.latitude
+            row.geocoded_lng = payload.longitude
+    row.last_updated = now
+    await db.commit()
+    return {"ok": True, "location_name": row.location_name}

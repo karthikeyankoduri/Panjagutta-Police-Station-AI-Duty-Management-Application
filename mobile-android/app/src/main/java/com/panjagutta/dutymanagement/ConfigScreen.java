@@ -52,6 +52,11 @@ final class ConfigScreen extends ModuleScreen {
         });
     }
 
+    @Override
+    void selectSub(int index) {
+        tab = index;
+    }
+
     private boolean canWrite() {
         return RoleAccess.canWriteConfig(role);
     }
@@ -59,12 +64,14 @@ final class ConfigScreen extends ModuleScreen {
     private void render() {
         a.content.removeAllViews();
         a.stopRefreshing();
-        heading("CONFIGURATION", "Station Configuration",
-                "Every value here is stored in the database and editable by the SHO / Admin SI; every change is audited. Shift timings are in Policy & Shifts.");
-        tabs(new String[]{"Duty requirements", "Sectors", "Sections", "Status & state lists", "Dashboard cards"}, tab, i -> {
-            tab = i;
-            render();
-        });
+        heading("ADMINISTRATION", "Station Configuration",
+                "Every value here is stored in the database and editable by the Admin SI; every change is audited. Shift timings are in Policy & Shifts.");
+        if (host == null) {
+            tabs(new String[]{"Duty requirements", "Sectors", "Sections", "Status & state lists", "Dashboard cards"}, tab, i -> {
+                tab = i;
+                render();
+            });
+        }
         if (tab == 0) renderDuties();
         else if (tab == 1) renderSectors();
         else if (tab == 2) renderSections();
@@ -291,22 +298,18 @@ final class ConfigScreen extends ModuleScreen {
 
     private void renderLists() {
         LinearLayout info = card(BLUE);
-        info.addView(muted("Status codes drive the availability engine and cannot be renamed, but their labels, descriptions, order and visibility can be edited. New leave types can be added."));
+        info.addView(muted("Status codes drive the availability engine and cannot be renamed, but their labels, descriptions, order and visibility can be edited."));
         add(info);
         Iterator<String> names = lists.keys();
         List<String> order = new ArrayList<>();
         while (names.hasNext()) order.add(names.next());
         for (String name : order) {
-            if ("dashboard_card".equals(name)) continue; // has its own tab
+            if ("dashboard_card".equals(name) || "leave_type".equals(name) || "leave_status".equals(name)) continue; // has its own tab
             JSONArray items = lists.optJSONArray(name);
             if (items == null) continue;
             String title = name;
             for (String[] t : LIST_TITLES) if (t[0].equals(name)) title = t[1];
             section(title.toUpperCase() + " (" + items.length() + ")");
-            if ("leave_type".equals(name) && canWrite()) {
-                final int count = items.length();
-                a.content.addView(fullWidth(secondary("+ Add leave type", () -> addLeaveType(count))));
-            }
             for (int i = 0; i < items.length(); i++) {
                 JSONObject it = items.optJSONObject(i);
                 if (it == null) continue;

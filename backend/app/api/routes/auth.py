@@ -19,6 +19,7 @@ from app.core.config import settings
 from app.db.database import get_db
 from app.models.models import Sector, Staff, User, UserSession
 from app.services.attendance_auto import record_sign_in, record_sign_out
+from app.services.usernames import normalise_login
 from app.services.audit import log_event, AuditAction
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
@@ -26,7 +27,7 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 # Shared default passwords issued at account provisioning (staff import, admin
 # create/reset). Logging in with one of these forces a password change before
 # any other action (guide §9.1 step 2).
-KNOWN_DEFAULT_PASSWORDS = ("Password@PJ2024!",)
+KNOWN_DEFAULT_PASSWORDS = ("PJ@2024", "Password@PJ2024!")  # the old long default stays flagged for accounts already issued with it
 
 
 class LoginRequest(BaseModel):
@@ -56,8 +57,6 @@ class DraftIn(BaseModel):
 
 
 def password_problem(password: str, username: str) -> Optional[str]:
-    if len(password) < 10:
-        return "Password must be at least 10 characters"
     if not any(c.isdigit() for c in password) or not any(c.isalpha() for c in password):
         return "Password must contain both letters and numbers"
     if username and username.lower() in password.lower():
@@ -82,7 +81,7 @@ async def login(
     client_ip = request.client.host if request.client else None
 
     identifier = (payload.username or "").strip()
-    identifier_lower = identifier.lower()
+    identifier_lower = normalise_login(identifier)  # case and spaces never matter
     identifier_hyphen = identifier_lower.replace("_", "-")
     identifier_underscore = identifier_lower.replace("-", "_")
 
@@ -104,6 +103,7 @@ async def login(
                 Staff.notes.ilike(f"%Emp ID: {identifier}%"),
                 Staff.notes.ilike(f"%Gen No: {identifier}%"),
                 Staff.notes.ilike(f"%Dept No: {identifier}%"),
+                Staff.notes.ilike(f"%PG ID: {identifier}%"),  # original PG ID kept after the service number changed
             )
         )
         .order_by(

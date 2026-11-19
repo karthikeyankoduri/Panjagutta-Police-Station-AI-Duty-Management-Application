@@ -19,6 +19,7 @@ from app.api.routes.auth import router as auth_router
 from app.api.routes.staff import router as staff_router
 from app.api.routes.dashboard import router as dashboard_router
 from app.api.routes.roster import router as roster_router
+from app.api.routes.roster_week import router as roster_week_router
 from app.api.routes.operations import (
     leave_router, movement_router, attendance_router, task_router
 )
@@ -29,6 +30,8 @@ from app.api.routes.reports import router as reports_router
 from app.api.routes.audit import router as audit_router
 from app.api.routes.ai import router as ai_router
 from app.api.routes.mobile import router as mobile_router
+from app.api.routes.locations import router as locations_router
+from app.api.routes.chat import router as chat_router
 from app.api.routes.config import router as config_router
 from app.api.routes.notifications import router as notifications_router
 from app.api.routes.duty_changes import change_request_router
@@ -164,9 +167,9 @@ async def auth_rate_limit(request: Request, call_next):
 
 
 # Routers
-for r in (auth_router, staff_router, dashboard_router, roster_router, leave_router, movement_router,
+for r in (auth_router, staff_router, dashboard_router, roster_week_router, roster_router, leave_router, movement_router,
           attendance_router, task_router, attachments_router, duties_router, policy_router, reports_router,
-          audit_router, ai_router, mobile_router, config_router, notifications_router, change_request_router):
+          audit_router, ai_router, mobile_router, config_router, notifications_router, change_request_router, locations_router, chat_router):
     app.include_router(r, prefix="/api")
 
 
